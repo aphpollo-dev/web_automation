@@ -89,6 +89,7 @@ class PurchaseService:
                 },
                 "payment_method": {
                     "card_number": default_payment.get("card_number"),
+                    "card_holder": default_payment.get("card_holder"),
                     "expiry_month": default_payment.get("expiry_month"),
                     "expiry_year": default_payment.get("expiry_year"),
                     "cvv": default_payment.get("cvv")
