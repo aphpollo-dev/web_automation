@@ -77,8 +77,15 @@ class WebScraper:
             chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--window-size=1920,1080")
             
-            service = Service(ChromeDriverManager().install())
-            # service = Service("C:/chromedriver-win64/chromedriver.exe")
+            # Add these options to prevent payment handler dialogs
+            chrome_options.add_argument("--disable-features=PaymentHandlerMinimal")
+            chrome_options.add_experimental_option("prefs", {
+                "payment.method_promo_shown": True,
+                "autofill.credit_card_enabled": False,
+                "profile.default_content_setting_values.payment_handler": 2  # 2 = block
+            })            
+            # service = Service(ChromeDriverManager().install())
+            service = Service("C:/chromedriver-win64/chromedriver.exe")
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             logger.info("Selenium WebDriver initialized")
             return self.driver
@@ -87,10 +94,12 @@ class WebScraper:
             raise
     
     async def close_driver(self):
+        await self.find_and_click_button(["payment", "complete_order"])
+        logger.info("Clicking payment/complete order button if available")
         """Close the Selenium WebDriver with a 1-minute delay."""
         if self.driver:
-            logger.info("Waiting for 1 minute before closing the Selenium WebDriver")
-            await asyncio.sleep(60)  # 1-minute delay
+            logger.info("Waiting for 20s before closing the Selenium WebDriver")
+            await asyncio.sleep(20)  # 1-minute delay
             self.driver.quit()
             self.driver = None
             logger.info("Selenium WebDriver closed")
@@ -222,11 +231,11 @@ class WebScraper:
                     "//a[contains(@href, 'cart')]"
                 ],
                 'payment': [
-                    "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'payment')]",
-                    "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'payment')]",
+                    "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'pay')]",
+                    "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'pay')]",
                     "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]",
                     "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]",
-                    "//*[contains(@id, 'payment') or contains(@class, 'payment')]"
+                    "//*[contains(@id, 'pay') or contains(@class, 'pay')]",
                 ],
                 'complete_order': [
                     "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'place order')]",
@@ -366,7 +375,49 @@ class WebScraper:
                                             # No alert present
                                             pass
                                     
-                                    logger.info(f"Successfully clicked {button_type} button")
+                                    # Find and uncheck any "Remember me" or "Save information" checkboxes BEFORE clicking payment button
+                                    remember_selectors = [
+                                        "//input[@type='checkbox' and (contains(@id, 'remember') or contains(@name, 'remember') or contains(@class, 'remember'))]",
+                                        "//input[@type='checkbox' and (contains(@id, 'save') or contains(@name, 'save') or contains(@class, 'save'))]",
+                                        "//input[@type='checkbox' and (contains(@id, 'store') or contains(@name, 'store') or contains(@class, 'store'))]",
+                                        "//input[@type='checkbox' and (contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'remember'))]",
+                                        "//input[@type='checkbox' and (contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'remember'))]",
+                                        "//input[@type='checkbox' and (contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save'))]",
+                                        "//input[@type='checkbox' and (contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save'))]",
+                                        "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'remember')]//input[@type='checkbox']",
+                                        "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save')]//input[@type='checkbox']"
+                                    ]
+                                    
+                                    checkboxes_unchecked = 0
+                                    for selector in remember_selectors:
+                                        try:
+                                            elements = self.driver.find_elements(By.XPATH, selector)
+                                            for element in elements:
+                                                if element.is_displayed() and element.is_selected():
+                                                    # Get checkbox label for logging
+                                                    try:
+                                                        label_text = "Unknown"
+                                                        label_id = element.get_attribute("id")
+                                                        if label_id:
+                                                            label_elem = self.driver.find_element(By.XPATH, f"//label[@for='{label_id}']")
+                                                            if label_elem:
+                                                                label_text = label_elem.text.strip()
+                                                        if not label_text or label_text == "Unknown":
+                                                            parent = self.driver.find_element(By.XPATH, f"//input[@id='{label_id}']/parent::*")
+                                                            if parent:
+                                                                label_text = parent.text.strip()
+                                                    except:
+                                                        pass
+                                                    
+                                                    logger.info(f"Unchecking save/remember checkbox: {label_text}")
+                                                    try:
+                                                        self.driver.execute_script("arguments[0].click();", element)
+                                                    except:
+                                                        element.click()
+                                                    checkboxes_unchecked += 1
+                                                    time.sleep(0.5)
+                                        except Exception as e:
+                                            logger.debug(f"Error handling remember/save checkbox with selector {selector}: {e}")    
                                     return True
                                 except (ElementClickInterceptedException, StaleElementReferenceException) as e:
                                     logger.warning(f"Could not click element: {e}")
@@ -640,23 +691,54 @@ class WebScraper:
                 try:
                     # Wait longer and ensure element is fully ready
                     card_number_input = WebDriverWait(self.driver, 10).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, card_selectors))
+                        EC.presence_of_element_located((By.CSS_SELECTOR, card_selectors))
                     )
                     
-                    ActionChains(self.driver).move_to_element(card_number_input).click().perform()
-                    card_number_input.clear()
-                    ActionChains(self.driver).send_keys_to_element(
-                        card_number_input, 
-                        self.user_data['payment_method']['card_number']
-                    ).perform()
+                    # Make sure the element is in view before interacting with it
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card_number_input)
+                    time.sleep(1)  # Give more time for scrolling to settle
+                    
+                    # Use pure JavaScript for interaction instead of ActionChains
+                    self.driver.execute_script("arguments[0].focus(); arguments[0].click();", card_number_input)
+                    time.sleep(0.5)
+                    
+                    # Clear the field using JavaScript
+                    self.driver.execute_script("arguments[0].value = '';", card_number_input)
+                    time.sleep(0.5)
+                    
+                    # Set the value using JavaScript and trigger appropriate events
+                    self.driver.execute_script("""
+                        arguments[0].value = arguments[1];
+                        arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                        arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+                    """, card_number_input, self.user_data['payment_method']['card_number'])
+                    
+                    logger.info("Successfully filled card number using JavaScript method")
                 except Exception as e:
-                    logger.warning(f"Direct card number input failed: {e}, trying JavaScript")
-                    # Fallback to JavaScript
-                    self.driver.execute_script(
-                        "arguments[0].value = arguments[1];", 
-                        card_number_input, 
-                        self.user_data['payment_method']['card_number']
-                    )
+                    logger.warning(f"Card number input failed: {e}, trying alternative method")
+                    try:
+                        # Try a more aggressive approach - character by character input
+                        self.driver.execute_script("""
+                            const input = arguments[0];
+                            const value = arguments[1];
+                            
+                            // Focus and clear
+                            input.focus();
+                            input.value = '';
+                            
+                            // Type character by character with small delays
+                            for (let i = 0; i < value.length; i++) {
+                                input.value += value[i];
+                                input.dispatchEvent(new Event('input', { bubbles: true }));
+                            }
+                            
+                            // Final change event
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                        """, card_number_input, self.user_data['payment_method']['card_number'])
+                        
+                        logger.info("Successfully filled card number using character-by-character method")
+                    except Exception as inner_e:
+                        logger.error(f"All card number input methods failed: {inner_e}")
                 
                 time.sleep(0.1)  # Wait between fields
                 
@@ -952,7 +1034,56 @@ class WebScraper:
                     logger.info("Detected payment or billing fields, filling with user data from MongoDB")
                     self.fill_form_fields(field_types)
                     
-                    # Try to find and click payment or complete order buttons
+                    # Find and uncheck any "Remember me" or "Save information" checkboxes BEFORE clicking payment button
+                    remember_selectors = [
+                        "//input[@type='checkbox' and (contains(@id, 'remember') or contains(@name, 'remember') or contains(@class, 'remember'))]",
+                        "//input[@type='checkbox' and (contains(@id, 'save') or contains(@name, 'save') or contains(@class, 'save'))]",
+                        "//input[@type='checkbox' and (contains(@id, 'store') or contains(@name, 'store') or contains(@class, 'store'))]",
+                        "//input[@type='checkbox' and (contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'remember'))]",
+                        "//input[@type='checkbox' and (contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'remember'))]",
+                        "//input[@type='checkbox' and (contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save'))]",
+                        "//input[@type='checkbox' and (contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save'))]",
+                        "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'remember')]//input[@type='checkbox']",
+                        "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save')]//input[@type='checkbox']"
+                    ]
+                    
+                    checkboxes_unchecked = 0
+                    for selector in remember_selectors:
+                        try:
+                            elements = self.driver.find_elements(By.XPATH, selector)
+                            for element in elements:
+                                if element.is_displayed() and element.is_selected():
+                                    # Get checkbox label for logging
+                                    try:
+                                        label_text = "Unknown"
+                                        label_id = element.get_attribute("id")
+                                        if label_id:
+                                            label_elem = self.driver.find_element(By.XPATH, f"//label[@for='{label_id}']")
+                                            if label_elem:
+                                                label_text = label_elem.text.strip()
+                                        if not label_text or label_text == "Unknown":
+                                            parent = self.driver.find_element(By.XPATH, f"//input[@id='{label_id}']/parent::*")
+                                            if parent:
+                                                label_text = parent.text.strip()
+                                    except:
+                                        pass
+                                    
+                                    logger.info(f"Unchecking save/remember checkbox: {label_text}")
+                                    try:
+                                        self.driver.execute_script("arguments[0].click();", element)
+                                    except:
+                                        element.click()
+                                    checkboxes_unchecked += 1
+                                    time.sleep(0.5)
+                        except Exception as e:
+                            logger.debug(f"Error handling remember/save checkbox with selector {selector}: {e}")
+                    
+                    if checkboxes_unchecked > 0:
+                        logger.info(f"Unchecked {checkboxes_unchecked} save/remember checkboxes")
+                        # Add a small delay after unchecking boxes
+                        time.sleep(1)
+
+                    # Now try to find and click payment or complete order buttons
                     if await self.find_and_click_button(['payment', 'complete_order']):
                         # Check if URL changed after clicking button
                         current_url = self.driver.current_url
@@ -1055,7 +1186,6 @@ class WebScraper:
             
             if checkboxes_checked > 0:
                 logger.info(f"Checked {checkboxes_checked} agreement/confirmation checkboxes during page scrape")
-            
         except Exception as e:
             logger.warning(f"Error checking agreement checkboxes during page scrape: {e}")
-            # Continue with the process even if there's an error checking checkboxes 
+            # Continue with the process even if there's an error checking checkboxes
