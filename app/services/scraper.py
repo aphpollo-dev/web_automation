@@ -516,21 +516,21 @@ class WebScraper:
             for (const selector of {json.dumps(field_types['billing'])}) {{
                 // Try common billing field names
                 if (selector.toLowerCase().includes('first') || selector.toLowerCase().includes('name') && !selector.toLowerCase().includes('last')) {{
-                    fillField(selector, userData.first_name); time.sleep(1);
+                    fillField(selector, userData.first_name);
                 }} else if (selector.toLowerCase().includes('last')) {{
-                    fillField(selector, userData.last_name); time.sleep(1);
+                    fillField(selector, userData.last_name);
                 }} else if (selector.toLowerCase().includes('address') || selector.toLowerCase().includes('street')) {{
-                    fillField(selector, userData.address.street); time.sleep(1);
+                    fillField(selector, userData.address.street);
                 }} else if (selector.toLowerCase().includes('address2') || selector.toLowerCase().includes('apt')) {{
-                    fillField(selector, userData.address.apt); time.sleep(1);
+                    fillField(selector, userData.address.apt);
                 }} else if (selector.toLowerCase().includes('city')) {{
-                    fillField(selector, userData.address.city); time.sleep(1);
+                    fillField(selector, userData.address.city);
                 }} else if (selector.toLowerCase().includes('state') || selector.toLowerCase().includes('province')) {{
-                    fillField(selector, userData.address.state); time.sleep(1);
+                    fillField(selector, userData.address.state);
                 }} else if (selector.toLowerCase().includes('zip') || selector.toLowerCase().includes('postal')) {{
-                    fillField(selector, userData.address.zip); time.sleep(1);
+                    fillField(selector, userData.address.zip);
                 }} else if (selector.toLowerCase().includes('country')) {{
-                    fillField(selector, userData.address.country); time.sleep(1);
+                    fillField(selector, userData.address.country);
                 }}
             }}
             
