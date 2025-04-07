@@ -77,8 +77,15 @@ class WebScraper:
             chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--window-size=1920,1080")
             
-            service = Service(ChromeDriverManager().install())
-            # service = Service("C:/chromedriver-win64/chromedriver.exe")
+            # Add these options to prevent payment handler dialogs
+            chrome_options.add_argument("--disable-features=PaymentHandlerMinimal")
+            chrome_options.add_experimental_option("prefs", {
+                "payment.method_promo_shown": True,
+                "autofill.credit_card_enabled": False,
+                "profile.default_content_setting_values.payment_handler": 2  # 2 = block
+            })            
+            # service = Service(ChromeDriverManager().install())
+            service = Service("C:/chromedriver-win64/chromedriver.exe")
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             logger.info("Selenium WebDriver initialized")
             return self.driver
@@ -222,11 +229,11 @@ class WebScraper:
                     "//a[contains(@href, 'cart')]"
                 ],
                 'payment': [
-                    "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'payment')]",
-                    "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'payment')]",
+                    "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'pay')]",
+                    "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'pay')]",
                     "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]",
                     "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'continue')]",
-                    "//*[contains(@id, 'payment') or contains(@class, 'payment')]"
+                    "//*[contains(@id, 'pay') or contains(@class, 'pay')]",
                 ],
                 'complete_order': [
                     "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'place order')]",
@@ -640,23 +647,54 @@ class WebScraper:
                 try:
                     # Wait longer and ensure element is fully ready
                     card_number_input = WebDriverWait(self.driver, 10).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, card_selectors))
+                        EC.presence_of_element_located((By.CSS_SELECTOR, card_selectors))
                     )
                     
-                    ActionChains(self.driver).move_to_element(card_number_input).click().perform()
-                    card_number_input.clear()
-                    ActionChains(self.driver).send_keys_to_element(
-                        card_number_input, 
-                        self.user_data['payment_method']['card_number']
-                    ).perform()
+                    # Make sure the element is in view before interacting with it
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card_number_input)
+                    time.sleep(1)  # Give more time for scrolling to settle
+                    
+                    # Use pure JavaScript for interaction instead of ActionChains
+                    self.driver.execute_script("arguments[0].focus(); arguments[0].click();", card_number_input)
+                    time.sleep(0.5)
+                    
+                    # Clear the field using JavaScript
+                    self.driver.execute_script("arguments[0].value = '';", card_number_input)
+                    time.sleep(0.5)
+                    
+                    # Set the value using JavaScript and trigger appropriate events
+                    self.driver.execute_script("""
+                        arguments[0].value = arguments[1];
+                        arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                        arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+                    """, card_number_input, self.user_data['payment_method']['card_number'])
+                    
+                    logger.info("Successfully filled card number using JavaScript method")
                 except Exception as e:
-                    logger.warning(f"Direct card number input failed: {e}, trying JavaScript")
-                    # Fallback to JavaScript
-                    self.driver.execute_script(
-                        "arguments[0].value = arguments[1];", 
-                        card_number_input, 
-                        self.user_data['payment_method']['card_number']
-                    )
+                    logger.warning(f"Card number input failed: {e}, trying alternative method")
+                    try:
+                        # Try a more aggressive approach - character by character input
+                        self.driver.execute_script("""
+                            const input = arguments[0];
+                            const value = arguments[1];
+                            
+                            // Focus and clear
+                            input.focus();
+                            input.value = '';
+                            
+                            // Type character by character with small delays
+                            for (let i = 0; i < value.length; i++) {
+                                input.value += value[i];
+                                input.dispatchEvent(new Event('input', { bubbles: true }));
+                            }
+                            
+                            // Final change event
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                        """, card_number_input, self.user_data['payment_method']['card_number'])
+                        
+                        logger.info("Successfully filled card number using character-by-character method")
+                    except Exception as inner_e:
+                        logger.error(f"All card number input methods failed: {inner_e}")
                 
                 time.sleep(0.1)  # Wait between fields
                 
@@ -790,12 +828,52 @@ class WebScraper:
             
             logger.info(f"Filled {filled_fields} form fields with user data from MongoDB")
             
+            # Click on a blank area (left bottom corner) of the browser after filling forms
+            try:
+                logger.info("Clicking on a blank area (bottom-left corner) after filling forms and before payment button")
+                
+                # Get the window size
+                window_size = self.driver.get_window_size()
+                width = window_size['width']
+                height = window_size['height']
+                
+                # Move to the bottom-left corner (20px from left, 20px from bottom) and click
+                actions = ActionChains(self.driver)
+                actions.move_by_offset(20, height - 20).click().perform()
+                
+                # Reset mouse position to (0,0) to not affect future interactions
+                actions.move_to_element_with_offset(self.driver.find_element(By.TAG_NAME, "body"), 0, 0).perform()
+                
+                # Also try using JavaScript to click on the blank area
+                self.driver.execute_script("""
+                    // Click on the bottom-left corner of the page
+                    const clickEvent = new MouseEvent('click', {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                        clientX: 20,
+                        clientY: window.innerHeight - 20
+                    });
+                    document.elementFromPoint(20, window.innerHeight - 20).dispatchEvent(clickEvent);
+                    console.log('Clicked on blank area (bottom-left corner) after form filling');
+                """)
+                
+                # Wait for any potential UI updates after clicking
+                time.sleep(1)
+                
+                # Add additional delay after clicking blank area for better reliability
+                time.sleep(1)
+                
+                logger.info("Successfully clicked on blank area after form filling")
+            except Exception as e:
+                logger.warning(f"Error clicking on blank area after form filling: {e}")
+            
             return filled_fields > 0
         
         except Exception as e:
             logger.error(f"Error filling form fields: {e}")
             return False
-    
+
     async def execute_action(self, action_code: str) -> str:
         """Execute JavaScript action code in the browser.
         
@@ -952,6 +1030,43 @@ class WebScraper:
                     logger.info("Detected payment or billing fields, filling with user data from MongoDB")
                     self.fill_form_fields(field_types)
                     
+                    # Click on a blank area (left bottom corner) before clicking payment button
+                    try:
+                        logger.info("Clicking on a blank area (bottom-left corner) before payment button click")
+                        
+                        # Get the window size
+                        window_size = self.driver.get_window_size()
+                        width = window_size['width']
+                        height = window_size['height']
+                        
+                        # Move to the bottom-left corner (20px from left, 20px from bottom) and click
+                        actions = ActionChains(self.driver)
+                        actions.move_by_offset(20, height - 20).click().perform()
+                        
+                        # Reset mouse position to (0,0) to not affect future interactions
+                        actions.move_to_element_with_offset(self.driver.find_element(By.TAG_NAME, "body"), 0, 0).perform()
+                        
+                        # Also try using JavaScript to click on the blank area
+                        self.driver.execute_script("""
+                            // Click on the bottom-left corner of the page
+                            const clickEvent = new MouseEvent('click', {
+                                bubbles: true,
+                                cancelable: true,
+                                view: window,
+                                clientX: 20,
+                                clientY: window.innerHeight - 20
+                            });
+                            document.elementFromPoint(20, window.innerHeight - 20).dispatchEvent(clickEvent);
+                            console.log('Clicked on blank area (bottom-left corner) before payment button click');
+                        """)
+                        
+                        # Add additional delay after clicking blank area for better reliability
+                        time.sleep(1)
+                        
+                        logger.info("Successfully clicked on blank area before payment button")
+                    except Exception as e:
+                        logger.warning(f"Error clicking on blank area before payment button: {e}")
+                    
                     # Try to find and click payment or complete order buttons
                     if await self.find_and_click_button(['payment', 'complete_order']):
                         # Check if URL changed after clicking button
@@ -1058,4 +1173,4 @@ class WebScraper:
             
         except Exception as e:
             logger.warning(f"Error checking agreement checkboxes during page scrape: {e}")
-            # Continue with the process even if there's an error checking checkboxes 
+            # Continue with the process even if there's an error checking checkboxes
