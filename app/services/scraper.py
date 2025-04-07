@@ -87,8 +87,10 @@ class WebScraper:
             raise
     
     async def close_driver(self):
-        """Close the Selenium WebDriver."""
+        """Close the Selenium WebDriver with a 1-minute delay."""
         if self.driver:
+            logger.info("Waiting for 1 minute before closing the Selenium WebDriver")
+            await asyncio.sleep(60)  # 1-minute delay
             self.driver.quit()
             self.driver = None
             logger.info("Selenium WebDriver closed")
@@ -514,21 +516,21 @@ class WebScraper:
             for (const selector of {json.dumps(field_types['billing'])}) {{
                 // Try common billing field names
                 if (selector.toLowerCase().includes('first') || selector.toLowerCase().includes('name') && !selector.toLowerCase().includes('last')) {{
-                    fillField(selector, userData.first_name);
+                    fillField(selector, userData.first_name); time.sleep(1);
                 }} else if (selector.toLowerCase().includes('last')) {{
-                    fillField(selector, userData.last_name);
+                    fillField(selector, userData.last_name); time.sleep(1);
                 }} else if (selector.toLowerCase().includes('address') || selector.toLowerCase().includes('street')) {{
-                    fillField(selector, userData.address.street);
+                    fillField(selector, userData.address.street); time.sleep(1);
                 }} else if (selector.toLowerCase().includes('address2') || selector.toLowerCase().includes('apt')) {{
-                    fillField(selector, userData.address.apt);
+                    fillField(selector, userData.address.apt); time.sleep(1);
                 }} else if (selector.toLowerCase().includes('city')) {{
-                    fillField(selector, userData.address.city);
+                    fillField(selector, userData.address.city); time.sleep(1);
                 }} else if (selector.toLowerCase().includes('state') || selector.toLowerCase().includes('province')) {{
-                    fillField(selector, userData.address.state);
+                    fillField(selector, userData.address.state); time.sleep(1);
                 }} else if (selector.toLowerCase().includes('zip') || selector.toLowerCase().includes('postal')) {{
-                    fillField(selector, userData.address.zip);
+                    fillField(selector, userData.address.zip); time.sleep(1);
                 }} else if (selector.toLowerCase().includes('country')) {{
-                    fillField(selector, userData.address.country);
+                    fillField(selector, userData.address.country); time.sleep(1);
                 }}
             }}
             
@@ -593,200 +595,199 @@ class WebScraper:
             
             return filledFields;
             """
-            # try:
-            #     # First look for all possible Stripe iframes
-            #     stripe_iframes = self.driver.find_elements(
-            #         By.CSS_SELECTOR, 
-            #         "iframe[name^='__privateStripeFrame'], iframe.stripe-element, iframe.card-fields-iframe"
-            #     )
+            try:
+                # First look for all possible Stripe iframes
+                stripe_iframes = self.driver.find_elements(
+                    By.CSS_SELECTOR, 
+                    "iframe[name^='__privateStripeFrame'], iframe.stripe-element, iframe.card-fields-iframe"
+                )
                 
-            #     iframe_found = False
-            #     if stripe_iframes:
-            #         logger.info(f"Found {len(stripe_iframes)} potential payment iframes")
-            #         for iframe in stripe_iframes:
-            #             try:
-            #                 self.driver.switch_to.frame(iframe)
-            #                 # Verify if this is the right frame by checking for card input
-            #                 card_inputs = self.driver.find_elements(
-            #                     By.CSS_SELECTOR, 
-            #                     "input[name='number'], input[name='cardnumber'], input[data-elements-stable-field-name='cardNumber']"
-            #                 )
-            #                 if card_inputs:
-            #                     logger.info("Found correct payment iframe with card field")
-            #                     iframe_found = True
-            #                     break
-            #                 else:
-            #                     # Not the right frame, switch back
-            #                     self.driver.switch_to.default_content()
-            #             except Exception as e:
-            #                 logger.warning(f"Error checking iframe: {e}")
-            #                 self.driver.switch_to.default_content()
+                iframe_found = False
+                if stripe_iframes:
+                    logger.info(f"Found {len(stripe_iframes)} potential payment iframes")
+                    for iframe in stripe_iframes:
+                        try:
+                            self.driver.switch_to.frame(iframe)
+                            # Verify if this is the right frame by checking for card input
+                            card_inputs = self.driver.find_elements(
+                                By.CSS_SELECTOR, 
+                                "input[name='number'], input[name='cardnumber'], input[data-elements-stable-field-name='cardNumber']"
+                            )
+                            if card_inputs:
+                                logger.info("Found correct payment iframe with card field")
+                                iframe_found = True
+                                break
+                            else:
+                                # Not the right frame, switch back
+                                self.driver.switch_to.default_content()
+                        except Exception as e:
+                            logger.warning(f"Error checking iframe: {e}")
+                            self.driver.switch_to.default_content()
                 
-            #     if not iframe_found:
-            #         logger.warning("Could not find payment iframe with card field, continuing with regular form")
+                if not iframe_found:
+                    logger.warning("Could not find payment iframe with card field, continuing with regular form")
                 
-            #     # Wait for payment fields with more robust selectors
-            #     card_selectors = "input[name='number'], input[name='cardnumber'], input[data-elements-stable-field-name='cardNumber']"
-            #     expiry_selectors = "input[name='expiry']"
-            #     cvv_selectors = "input[name='verification_value'], input[name='cvc'], input[data-elements-stable-field-name='cardCvc']"
-            #     name_selectors = "input[name='name'], input[name='cardholder-name']"
+                # Wait for payment fields with more robust selectors
+                card_selectors = "input[name='number'], input[name='cardnumber'], input[data-elements-stable-field-name='cardNumber']"
+                expiry_selectors = "input[name='expiry']"
+                cvv_selectors = "input[name='verification_value'], input[name='cvc'], input[data-elements-stable-field-name='cardCvc']"
+                name_selectors = "input[name='name'], input[name='cardholder-name']"
                 
-            #     # Fill card number with better error handling
-            #     try:
-            #         # Wait longer and ensure element is fully ready
-            #         card_number_input = WebDriverWait(self.driver, 15).until(
-            #             EC.element_to_be_clickable((By.CSS_SELECTOR, card_selectors))
-            #         )
-            #         # Scroll to element to ensure it's in view
-            #         # self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card_number_input)
-            #         # time.sleep(1)  # Additional wait for element to stabilize
+                # Fill card number with better error handling
+                try:
+                    # Wait longer and ensure element is fully ready
+                    card_number_input = WebDriverWait(self.driver, 15).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, card_selectors))
+                    )
+                    # Scroll to element to ensure it's in view
+                    # self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card_number_input)
+                    # time.sleep(1)  # Additional wait for element to stabilize
                     
-            #         # Try direct input first
-            #         ActionChains(self.driver).move_to_element(card_number_input).click().perform()
-            #         card_number_input.clear()
-            #         ActionChains(self.driver).send_keys_to_element(
-            #             card_number_input, 
-            #             self.user_data['payment_method']['card_number']
-            #         ).perform()
-            #     except Exception as e:
-            #         logger.warning(f"Direct card number input failed: {e}, trying JavaScript")
-            #         # Fallback to JavaScript
-            #         self.driver.execute_script(
-            #             "arguments[0].value = arguments[1];", 
-            #             card_number_input, 
-            #             self.user_data['payment_method']['card_number']
-            #         )
+                    # Try direct input first
+                    ActionChains(self.driver).move_to_element(card_number_input).click().perform()
+                    card_number_input.clear()
+                    ActionChains(self.driver).send_keys_to_element(
+                        card_number_input, 
+                        self.user_data['payment_method']['card_number']
+                    ).perform()
+                except Exception as e:
+                    logger.warning(f"Direct card number input failed: {e}, trying JavaScript")
+                    # Fallback to JavaScript
+                    self.driver.execute_script(
+                        "arguments[0].value = arguments[1];", 
+                        card_number_input, 
+                        self.user_data['payment_method']['card_number']
+                    )
                 
-            #     time.sleep(1)  # Wait between fields
+                time.sleep(1)  # Wait between fields
                 
-            #     # Similar pattern for expiry
-            #     try:
-            #         expiry_input = WebDriverWait(self.driver, 10).until(
-            #             EC.presence_of_element_located((By.CSS_SELECTOR, expiry_selectors)))
+                # Similar pattern for expiry
+                try:
+                    expiry_input = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, expiry_selectors)))
                 
-            #         # Scroll element into view with margin to avoid overlapping elements
-            #         self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); window.scrollBy(0, -100);", expiry_input)
-            #         time.sleep(1)
+                    # Scroll element into view with margin to avoid overlapping elements
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); window.scrollBy(0, -100);", expiry_input)
+                    time.sleep(1)
                     
-            #         # Try JavaScript click instead of direct click
-            #         self.driver.execute_script("arguments[0].focus(); arguments[0].click();", expiry_input)
-            #         time.sleep(1)
+                    # Try JavaScript click instead of direct click
+                    self.driver.execute_script("arguments[0].focus(); arguments[0].click();", expiry_input)
+                    time.sleep(1)
                     
-            #         # Use JavaScript to clear the field
-            #         self.driver.execute_script("arguments[0].value = '';", expiry_input)
-            #         time.sleep(0.5)
+                    # Use JavaScript to clear the field
+                    self.driver.execute_script("arguments[0].value = '';", expiry_input)
+                    time.sleep(0.5)
                     
-            #         # Format expiry data
-            #         expiry_value = f"{self.user_data['payment_method']['expiry_month']}/{self.user_data['payment_method']['expiry_year'][-2:]}"
+                    # Format expiry data
+                    expiry_value = f"{self.user_data['payment_method']['expiry_month']}/{self.user_data['payment_method']['expiry_year'][-2:]}"
                     
-            #         # Use JavaScript to set value directly
-            #         self.driver.execute_script("arguments[0].value = arguments[1];", expiry_input, expiry_value)
-            #         # Trigger input event to ensure the value is registered
-            #         self.driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", expiry_input)
-            #         self.driver.execute_script("arguments[0].dispatchEvent(new Event('change', { bubbles: true }));", expiry_input)
-            #         time.sleep(0.5)
-            #         # This line is redundant now since we've already input the expiry data above
-            #         # ActionChains(self.driver).send_keys_to_element(expiry_input, expiry_value).perform()
-            #     except Exception as e:
-            #         logger.warning(f"Direct expiry input failed: {e}, trying JavaScript")
-            #         try:
-            #             # Format the expiry value in the exception handler too
-            #             expiry_value = f"{self.user_data['payment_method']['expiry_month']}/{self.user_data['payment_method']['expiry_year'][-2:]}"
-            #             self.driver.execute_script(
-            #                 "arguments[0].value = arguments[1];", 
-            #                 expiry_input, 
-            #                 expiry_value
-            #             )
-            #         except Exception as inner_e:
-            #             logger.error(f"JavaScript expiry input also failed: {inner_e}")
+                    # Use JavaScript to set value directly
+                    self.driver.execute_script("arguments[0].value = arguments[1];", expiry_input, expiry_value)
+                    # Trigger input event to ensure the value is registered
+                    self.driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", expiry_input)
+                    self.driver.execute_script("arguments[0].dispatchEvent(new Event('change', { bubbles: true }));", expiry_input)
+                    time.sleep(0.5)
+                    # This line is redundant now since we've already input the expiry data above
+                    # ActionChains(self.driver).send_keys_to_element(expiry_input, expiry_value).perform()
+                except Exception as e:
+                    logger.warning(f"Direct expiry input failed: {e}, trying JavaScript")
+                    try:
+                        # Format the expiry value in the exception handler too
+                        expiry_value = f"{self.user_data['payment_method']['expiry_month']}/{self.user_data['payment_method']['expiry_year'][-2:]}"
+                        self.driver.execute_script(
+                            "arguments[0].value = arguments[1];", 
+                            expiry_input, 
+                            expiry_value
+                        )
+                    except Exception as inner_e:
+                        logger.error(f"JavaScript expiry input also failed: {inner_e}")
                     
-            #     time.sleep(1)
+                time.sleep(1)
                 
-            #     # Similar pattern for CVV
-            #     try:
-            #         cvv_input = WebDriverWait(self.driver, 10).until(
-            #             EC.presence_of_element_located((By.CSS_SELECTOR, cvv_selectors)))
+                # Similar pattern for CVV
+                try:
+                    cvv_input = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, cvv_selectors)))
                 
-            #         # Scroll element into view with margin to avoid overlapping elements
-            #         self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); window.scrollBy(0, -100);", cvv_input)
-            #         time.sleep(1)
+                    # Scroll element into view with margin to avoid overlapping elements
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); window.scrollBy(0, -100);", cvv_input)
+                    time.sleep(1)
                     
-            #         # Try JavaScript click instead of direct click
-            #         self.driver.execute_script("arguments[0].focus(); arguments[0].click();", cvv_input)
-            #         time.sleep(1)
+                    # Try JavaScript click instead of direct click
+                    self.driver.execute_script("arguments[0].focus(); arguments[0].click();", cvv_input)
+                    time.sleep(1)
                     
-            #         # Use JavaScript to clear the field
-            #         self.driver.execute_script("arguments[0].value = '';", cvv_input)
-            #         time.sleep(0.5)
+                    # Use JavaScript to clear the field
+                    self.driver.execute_script("arguments[0].value = '';", cvv_input)
+                    time.sleep(0.5)
                     
-            #         # Use JavaScript to set value directly
-            #         self.driver.execute_script("arguments[0].value = arguments[1];", cvv_input, self.user_data['payment_method']['cvv'])
-            #         # Trigger input event to ensure the value is registered
-            #         self.driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", cvv_input)
-            #         self.driver.execute_script("arguments[0].dispatchEvent(new Event('change', { bubbles: true }));", cvv_input)
-            #         time.sleep(0.5)
-            #     except Exception as e:
-            #         logger.warning(f"Direct CVV input failed: {e}, trying JavaScript")
-            #         try:
-            #             self.driver.execute_script(
-            #                 "arguments[0].value = arguments[1];", 
-            #                 cvv_input, 
-            #                 self.user_data['payment_method']['cvv']
-            #             )
-            #         except Exception as inner_e:
-            #             logger.error(f"JavaScript CVV input also failed: {inner_e}")
+                    # Use JavaScript to set value directly
+                    self.driver.execute_script("arguments[0].value = arguments[1];", cvv_input, self.user_data['payment_method']['cvv'])
+                    # Trigger input event to ensure the value is registered
+                    self.driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", cvv_input)
+                    self.driver.execute_script("arguments[0].dispatchEvent(new Event('change', { bubbles: true }));", cvv_input)
+                    time.sleep(0.5)
+                except Exception as e:
+                    logger.warning(f"Direct CVV input failed: {e}, trying JavaScript")
+                    try:
+                        self.driver.execute_script(
+                            "arguments[0].value = arguments[1];", 
+                            cvv_input, 
+                            self.user_data['payment_method']['cvv']
+                        )
+                    except Exception as inner_e:
+                        logger.error(f"JavaScript CVV input also failed: {inner_e}")
                     
-            #     time.sleep(1)
+                time.sleep(1)
                 
-            #     # Similar pattern for name
-            #     try:
-            #         name_input = WebDriverWait(self.driver, 10).until(
-            #             EC.presence_of_element_located((By.CSS_SELECTOR, name_selectors)))
+                # Similar pattern for name
+                try:
+                    name_input = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, name_selectors)))
                 
-            #         # Scroll element into view with margin to avoid overlapping elements
-            #         self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); window.scrollBy(0, -100);", name_input)
-            #         time.sleep(1)
+                    # Scroll element into view with margin to avoid overlapping elements
+                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); window.scrollBy(0, -100);", name_input)
+                    time.sleep(1)
                     
-            #         # Try JavaScript click instead of direct click
-            #         self.driver.execute_script("arguments[0].focus(); arguments[0].click();", name_input)
-            #         time.sleep(1)
+                    # Try JavaScript click instead of direct click
+                    self.driver.execute_script("arguments[0].focus(); arguments[0].click();", name_input)
+                    time.sleep(1)
                     
-            #         # Use JavaScript to clear the field
-            #         self.driver.execute_script("arguments[0].value = '';", name_input)
-            #         time.sleep(0.5)
+                    # Use JavaScript to clear the field
+                    self.driver.execute_script("arguments[0].value = '';", name_input)
+                    time.sleep(0.5)
                     
-            #         # Use JavaScript to set value directly
-            #         name_value = self.user_data['payment_method']['card_holder']
-            #         self.driver.execute_script("arguments[0].value = arguments[1];", name_input, name_value)
-            #         # Trigger input event to ensure the value is registered
-            #         self.driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", name_input)
-            #         self.driver.execute_script("arguments[0].dispatchEvent(new Event('change', { bubbles: true }));", name_input)
-            #         time.sleep(0.5)
-            #     except Exception as e:
-            #         logger.warning(f"Direct name input failed: {e}, trying JavaScript")
-            #         try:
-            #             name_value = self.user_data['payment_method']['card_holder']
-            #             self.driver.execute_script(
-            #                 "arguments[0].value = arguments[1];", 
-            #                 name_input, 
-            #                 name_value
-            #             )
-            #         except Exception as inner_e:
-            #             logger.error(f"JavaScript name input also failed: {inner_e}")
+                    # Use JavaScript to set value directly
+                    name_value = self.user_data['payment_method']['card_holder']
+                    self.driver.execute_script("arguments[0].value = arguments[1];", name_input, name_value)
+                    # Trigger input event to ensure the value is registered
+                    self.driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", name_input)
+                    self.driver.execute_script("arguments[0].dispatchEvent(new Event('change', { bubbles: true }));", name_input)
+                    time.sleep(0.5)
+                except Exception as e:
+                    logger.warning(f"Direct name input failed: {e}, trying JavaScript")
+                    try:
+                        name_value = self.user_data['payment_method']['card_holder']
+                        self.driver.execute_script(
+                            "arguments[0].value = arguments[1];", 
+                            name_input, 
+                            name_value
+                        )
+                    except Exception as inner_e:
+                        logger.error(f"JavaScript name input also failed: {inner_e}")
                     
-            #     time.sleep(1)
+                time.sleep(1)
                     
-            #     # Always ensure we switch back to default content
-            #     if iframe_found:
-            #         logger.info("Switching back to main content after filling payment fields")
-            #         self.driver.switch_to.default_content()
+                # Always ensure we switch back to default content
+                if iframe_found:
+                    logger.info("Switching back to main content after filling payment fields")
+                    self.driver.switch_to.default_content()
                     
-            # except Exception as e:
-            #     logger.error(f"Error filling payment form: {e}")
-            #     # Make sure we're back in the main document
-            #     self.driver.switch_to.default_content()
+            except Exception as e:
+                logger.error(f"Error filling payment form: {e}")
+                # Make sure we're back in the main document
+                self.driver.switch_to.default_content()
                 # Additional error handling as needed
-            # Execute the script
             filled_fields = self.driver.execute_script(fill_script)
             logger.info(f"Filled {filled_fields} form fields with user data from MongoDB")
             
