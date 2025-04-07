@@ -94,10 +94,12 @@ class WebScraper:
             raise
     
     async def close_driver(self):
+        await self.find_and_click_button(["payment", "complete_order"])
+        logger.info("Clicking payment/complete order button if available")
         """Close the Selenium WebDriver with a 1-minute delay."""
         if self.driver:
-            logger.info("Waiting for 1 minute before closing the Selenium WebDriver")
-            await asyncio.sleep(60)  # 1-minute delay
+            logger.info("Waiting for 20s before closing the Selenium WebDriver")
+            await asyncio.sleep(20)  # 1-minute delay
             self.driver.quit()
             self.driver = None
             logger.info("Selenium WebDriver closed")
@@ -373,7 +375,49 @@ class WebScraper:
                                             # No alert present
                                             pass
                                     
-                                    logger.info(f"Successfully clicked {button_type} button")
+                                    # Find and uncheck any "Remember me" or "Save information" checkboxes BEFORE clicking payment button
+                                    remember_selectors = [
+                                        "//input[@type='checkbox' and (contains(@id, 'remember') or contains(@name, 'remember') or contains(@class, 'remember'))]",
+                                        "//input[@type='checkbox' and (contains(@id, 'save') or contains(@name, 'save') or contains(@class, 'save'))]",
+                                        "//input[@type='checkbox' and (contains(@id, 'store') or contains(@name, 'store') or contains(@class, 'store'))]",
+                                        "//input[@type='checkbox' and (contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'remember'))]",
+                                        "//input[@type='checkbox' and (contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'remember'))]",
+                                        "//input[@type='checkbox' and (contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save'))]",
+                                        "//input[@type='checkbox' and (contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save'))]",
+                                        "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'remember')]//input[@type='checkbox']",
+                                        "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save')]//input[@type='checkbox']"
+                                    ]
+                                    
+                                    checkboxes_unchecked = 0
+                                    for selector in remember_selectors:
+                                        try:
+                                            elements = self.driver.find_elements(By.XPATH, selector)
+                                            for element in elements:
+                                                if element.is_displayed() and element.is_selected():
+                                                    # Get checkbox label for logging
+                                                    try:
+                                                        label_text = "Unknown"
+                                                        label_id = element.get_attribute("id")
+                                                        if label_id:
+                                                            label_elem = self.driver.find_element(By.XPATH, f"//label[@for='{label_id}']")
+                                                            if label_elem:
+                                                                label_text = label_elem.text.strip()
+                                                        if not label_text or label_text == "Unknown":
+                                                            parent = self.driver.find_element(By.XPATH, f"//input[@id='{label_id}']/parent::*")
+                                                            if parent:
+                                                                label_text = parent.text.strip()
+                                                    except:
+                                                        pass
+                                                    
+                                                    logger.info(f"Unchecking save/remember checkbox: {label_text}")
+                                                    try:
+                                                        self.driver.execute_script("arguments[0].click();", element)
+                                                    except:
+                                                        element.click()
+                                                    checkboxes_unchecked += 1
+                                                    time.sleep(0.5)
+                                        except Exception as e:
+                                            logger.debug(f"Error handling remember/save checkbox with selector {selector}: {e}")    
                                     return True
                                 except (ElementClickInterceptedException, StaleElementReferenceException) as e:
                                     logger.warning(f"Could not click element: {e}")
@@ -828,52 +872,12 @@ class WebScraper:
             
             logger.info(f"Filled {filled_fields} form fields with user data from MongoDB")
             
-            # Click on a blank area (left bottom corner) of the browser after filling forms
-            try:
-                logger.info("Clicking on a blank area (bottom-left corner) after filling forms and before payment button")
-                
-                # Get the window size
-                window_size = self.driver.get_window_size()
-                width = window_size['width']
-                height = window_size['height']
-                
-                # Move to the bottom-left corner (20px from left, 20px from bottom) and click
-                actions = ActionChains(self.driver)
-                actions.move_by_offset(20, height - 20).click().perform()
-                
-                # Reset mouse position to (0,0) to not affect future interactions
-                actions.move_to_element_with_offset(self.driver.find_element(By.TAG_NAME, "body"), 0, 0).perform()
-                
-                # Also try using JavaScript to click on the blank area
-                self.driver.execute_script("""
-                    // Click on the bottom-left corner of the page
-                    const clickEvent = new MouseEvent('click', {
-                        bubbles: true,
-                        cancelable: true,
-                        view: window,
-                        clientX: 20,
-                        clientY: window.innerHeight - 20
-                    });
-                    document.elementFromPoint(20, window.innerHeight - 20).dispatchEvent(clickEvent);
-                    console.log('Clicked on blank area (bottom-left corner) after form filling');
-                """)
-                
-                # Wait for any potential UI updates after clicking
-                time.sleep(1)
-                
-                # Add additional delay after clicking blank area for better reliability
-                time.sleep(1)
-                
-                logger.info("Successfully clicked on blank area after form filling")
-            except Exception as e:
-                logger.warning(f"Error clicking on blank area after form filling: {e}")
-            
             return filled_fields > 0
         
         except Exception as e:
             logger.error(f"Error filling form fields: {e}")
             return False
-
+    
     async def execute_action(self, action_code: str) -> str:
         """Execute JavaScript action code in the browser.
         
@@ -1030,44 +1034,56 @@ class WebScraper:
                     logger.info("Detected payment or billing fields, filling with user data from MongoDB")
                     self.fill_form_fields(field_types)
                     
-                    # Click on a blank area (left bottom corner) before clicking payment button
-                    try:
-                        logger.info("Clicking on a blank area (bottom-left corner) before payment button click")
-                        
-                        # Get the window size
-                        window_size = self.driver.get_window_size()
-                        width = window_size['width']
-                        height = window_size['height']
-                        
-                        # Move to the bottom-left corner (20px from left, 20px from bottom) and click
-                        actions = ActionChains(self.driver)
-                        actions.move_by_offset(20, height - 20).click().perform()
-                        
-                        # Reset mouse position to (0,0) to not affect future interactions
-                        actions.move_to_element_with_offset(self.driver.find_element(By.TAG_NAME, "body"), 0, 0).perform()
-                        
-                        # Also try using JavaScript to click on the blank area
-                        self.driver.execute_script("""
-                            // Click on the bottom-left corner of the page
-                            const clickEvent = new MouseEvent('click', {
-                                bubbles: true,
-                                cancelable: true,
-                                view: window,
-                                clientX: 20,
-                                clientY: window.innerHeight - 20
-                            });
-                            document.elementFromPoint(20, window.innerHeight - 20).dispatchEvent(clickEvent);
-                            console.log('Clicked on blank area (bottom-left corner) before payment button click');
-                        """)
-                        
-                        # Add additional delay after clicking blank area for better reliability
-                        time.sleep(1)
-                        
-                        logger.info("Successfully clicked on blank area before payment button")
-                    except Exception as e:
-                        logger.warning(f"Error clicking on blank area before payment button: {e}")
+                    # Find and uncheck any "Remember me" or "Save information" checkboxes BEFORE clicking payment button
+                    remember_selectors = [
+                        "//input[@type='checkbox' and (contains(@id, 'remember') or contains(@name, 'remember') or contains(@class, 'remember'))]",
+                        "//input[@type='checkbox' and (contains(@id, 'save') or contains(@name, 'save') or contains(@class, 'save'))]",
+                        "//input[@type='checkbox' and (contains(@id, 'store') or contains(@name, 'store') or contains(@class, 'store'))]",
+                        "//input[@type='checkbox' and (contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'remember'))]",
+                        "//input[@type='checkbox' and (contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'remember'))]",
+                        "//input[@type='checkbox' and (contains(translate(@id, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save'))]",
+                        "//input[@type='checkbox' and (contains(translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save'))]",
+                        "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'remember')]//input[@type='checkbox']",
+                        "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'save')]//input[@type='checkbox']"
+                    ]
                     
-                    # Try to find and click payment or complete order buttons
+                    checkboxes_unchecked = 0
+                    for selector in remember_selectors:
+                        try:
+                            elements = self.driver.find_elements(By.XPATH, selector)
+                            for element in elements:
+                                if element.is_displayed() and element.is_selected():
+                                    # Get checkbox label for logging
+                                    try:
+                                        label_text = "Unknown"
+                                        label_id = element.get_attribute("id")
+                                        if label_id:
+                                            label_elem = self.driver.find_element(By.XPATH, f"//label[@for='{label_id}']")
+                                            if label_elem:
+                                                label_text = label_elem.text.strip()
+                                        if not label_text or label_text == "Unknown":
+                                            parent = self.driver.find_element(By.XPATH, f"//input[@id='{label_id}']/parent::*")
+                                            if parent:
+                                                label_text = parent.text.strip()
+                                    except:
+                                        pass
+                                    
+                                    logger.info(f"Unchecking save/remember checkbox: {label_text}")
+                                    try:
+                                        self.driver.execute_script("arguments[0].click();", element)
+                                    except:
+                                        element.click()
+                                    checkboxes_unchecked += 1
+                                    time.sleep(0.5)
+                        except Exception as e:
+                            logger.debug(f"Error handling remember/save checkbox with selector {selector}: {e}")
+                    
+                    if checkboxes_unchecked > 0:
+                        logger.info(f"Unchecked {checkboxes_unchecked} save/remember checkboxes")
+                        # Add a small delay after unchecking boxes
+                        time.sleep(1)
+
+                    # Now try to find and click payment or complete order buttons
                     if await self.find_and_click_button(['payment', 'complete_order']):
                         # Check if URL changed after clicking button
                         current_url = self.driver.current_url
@@ -1170,7 +1186,6 @@ class WebScraper:
             
             if checkboxes_checked > 0:
                 logger.info(f"Checked {checkboxes_checked} agreement/confirmation checkboxes during page scrape")
-            
         except Exception as e:
             logger.warning(f"Error checking agreement checkboxes during page scrape: {e}")
             # Continue with the process even if there's an error checking checkboxes
