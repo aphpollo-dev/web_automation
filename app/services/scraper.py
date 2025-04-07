@@ -112,7 +112,7 @@ class WebScraper:
             self.driver.get(url)
             
             # Wait for page to load
-            time.sleep(5)
+            time.sleep(3)
             
             # Get the current URL (might have changed due to redirects)
             current_url = self.driver.current_url
