@@ -243,15 +243,26 @@ class PurchaseService:
                     return
                 
                 # Success!
-                logger.info("Purchase completed successfully")
-                await self.db.purchases.update_one(
-                    {"_id": ObjectId(purchase_id)},
-                    {"$set": {
-                        "status": PurchaseStatus.COMPLETED.value,
-                        "completed_at": datetime.utcnow()
-                    }}
-                )
-                
+                result = await self.scraper.close_driver()
+                if result == False:
+                    logger.info("Purchase failed")
+                    await self.db.purchases.update_one(
+                        {"_id": ObjectId(purchase_id)},
+                        {"$set": {
+                            "status": PurchaseStatus.FAILED.value,
+                            "error": "Other error",
+                        }}
+                    )
+                else:
+                    logger.info("Purchase completed successfully")
+                    await self.db.purchases.update_one(
+                        {"_id": ObjectId(purchase_id)},
+                        {"$set": {
+                            "status": PurchaseStatus.COMPLETED.value,
+                            "completed_at": datetime.utcnow()
+                        }}
+                    )
+                    
             except Exception as e:
                 logger.error(f"Error during purchase process: {e}")
                 await self.db.purchases.update_one(
@@ -274,6 +285,8 @@ class PurchaseService:
             error_selectors = [
                 "//div[contains(@class, 'error')]",
                 "//div[contains(@class, 'alert')]",
+                "//div[contains(@id, 'error')]",
+                "//div[contains(@id, 'alert')]",
                 "//p[contains(@class, 'error')]",
                 "//span[contains(@class, 'error')]",
                 "//*[contains(text(), 'payment declined')]",
