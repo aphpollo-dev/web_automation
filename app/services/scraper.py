@@ -84,8 +84,8 @@ class WebScraper:
                 "autofill.credit_card_enabled": False,
                 "profile.default_content_setting_values.payment_handler": 2  # 2 = block
             })            
-            # service = Service(ChromeDriverManager().install())
-            service = Service("C:/chromedriver-win64/chromedriver.exe")
+            service = Service(ChromeDriverManager().install())
+            # service = Service("C:/chromedriver-win64/chromedriver.exe")
             self.driver = webdriver.Chrome(service=service, options=chrome_options)
             logger.info("Selenium WebDriver initialized")
             return self.driver

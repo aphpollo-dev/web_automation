@@ -186,10 +186,35 @@ class PurchaseService:
                 logger.info(f"Navigating to product page: {product_url}")
                 await self.scraper.scrape_page(product_url)
                 
+                # Log step 1 to database
+                await self.db.purchases.update_one(
+                    {"_id": ObjectId(purchase_id)},
+                    {"$set": {
+                        "steps": {
+                            "step1": {
+                                "status": "info", 
+                                "content": f"Navigating to product page: {product_url}"
+                            }
+                        }
+                    }}
+                )
+                
                 # Step 2: Click Add to Cart
                 logger.info("Clicking 'Add to Cart' button")
                 if not await self.scraper.find_and_click_button(['add_to_cart']):
                     raise ValueError("Failed to find 'Add to Cart' button")
+                
+                # Update step 2 in the database while preserving step 1
+                await self.db.purchases.update_one(
+                    {"_id": ObjectId(purchase_id)},
+                    {"$set": {
+                        "steps.step2": {
+                            "status": "info", 
+                            "content": "Clicking 'Add to Cart' button"
+                        }
+                    }},
+                    upsert=True
+                )
                 
                 # Wait for cart update
                 await asyncio.sleep(2)
@@ -201,10 +226,15 @@ class PurchaseService:
                 logger.info(f"Navigating to checkout: {checkout_url}")
                 current_url, _ = await self.scraper.scrape_page(checkout_url)
                 
-                # Update current URL
+                # Update step 3 in the database
                 await self.db.purchases.update_one(
                     {"_id": ObjectId(purchase_id)},
-                    {"$set": {"current_url": current_url}}
+                    {"$set": {
+                        "steps.step3": {
+                            "status": "info", 
+                            "content": f"Navigating to checkout: {checkout_url}"
+                        }
+                    }}
                 )
                 
                 # Step 4: Fill checkout form
@@ -213,13 +243,46 @@ class PurchaseService:
                 if field_types["shipping"] or field_types["billing"] or field_types["payment"]:
                     self.scraper.fill_form_fields(field_types)
                 
+                # Update step 4 in the database
+                await self.db.purchases.update_one(
+                    {"_id": ObjectId(purchase_id)},
+                    {"$set": {
+                        "steps.step4": {
+                            "status": "info", 
+                            "content": "Filling checkout form with user information"
+                        }
+                    }}
+                )
+                
                 # Check and accept any agreement checkboxes
                 await self._check_agreement_checkboxes()
+                
+                # Update step for agreement checkboxes
+                await self.db.purchases.update_one(
+                    {"_id": ObjectId(purchase_id)},
+                    {"$set": {
+                        "steps.step4_1": {
+                            "status": "info", 
+                            "content": "Checking and accepting agreement checkboxes"
+                        }
+                    }}
+                )
                 
                 # Step 5: Click payment button
                 logger.info("Clicking payment button")
                 if not await self.scraper.find_and_click_button(['payment', 'complete_order', 'checkout']):
                     raise ValueError("Failed to find payment button")
+                
+                # Update step 5 in the database
+                await self.db.purchases.update_one(
+                    {"_id": ObjectId(purchase_id)},
+                    {"$set": {
+                        "steps.step5": {
+                            "status": "info", 
+                            "content": "Completing payment process"
+                        }
+                    }}
+                )
                 
                 # Wait for payment processing
                 await asyncio.sleep(3)
