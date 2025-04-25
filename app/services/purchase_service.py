@@ -9,7 +9,6 @@ from selenium.webdriver.common.by import By
 from urllib.parse import urlparse, urljoin
 
 from app.services.scraper import WebScraper
-from app.models.purchase import Purchase, PurchaseStatus
 
 class PurchaseService:
     def __init__(self, db):
@@ -111,49 +110,11 @@ class PurchaseService:
             logger.error(f"Error getting user data: {e}")
             raise
     
-    async def start_purchase_process(
-        self, 
-        product_url: str, 
-        user_id: str,
-        background_tasks: BackgroundTasks
-    ) -> str:
-        """Start the purchase process for a product.
-        
-        Args:
-            product_url: URL of the product to purchase
-            user_id: ID of the user making the purchase
-            background_tasks: FastAPI background tasks
-            
-        Returns:
-            ID of the created purchase task
-        """
-        try:
-            # Create a new purchase record
-            purchase = Purchase(
-                user_id=ObjectId(user_id),
-                product_url=product_url,
-                current_url=product_url,
-                status=PurchaseStatus.PENDING
-            )
-            
-            # Insert into database
-            result = await self.db.purchases.insert_one(purchase.model_dump(by_alias=True))
-            purchase_id = str(result.inserted_id)
-            
-            # Start the purchase process in the background
-            background_tasks.add_task(self.process_purchase, purchase_id=purchase_id)
-            
-            logger.info(f"Purchase process started for product URL: {product_url}, purchase ID: {purchase_id}")
-            return purchase_id
-        except Exception as e:
-            logger.error(f"Failed to start purchase process: {e}")
-            raise
-    
     async def process_purchase(self, purchase_id: str) -> None:
         """Process a purchase task.
         
         Args:
-            purchase_id: ID of the purchase task to process
+            purchase_id: ID of the purchase record
         """
         try:
             # Get the purchase record
@@ -162,11 +123,19 @@ class PurchaseService:
                 logger.error(f"Purchase record not found: {purchase_id}")
                 return
             
+            # Update status to processing
+            await self.db.purchases.update_one(
+                {"_id": ObjectId(purchase_id)},
+                {"$set": {"status": "processing"}}
+            )
+            
             # Extract user ID and product URL
             user_id = str(purchase["user_id"])
             product_url = purchase["product_url"]
+            product_config = purchase.get("config", {})
+            quantity = product_config.get("quantity", 1)
             
-            logger.info(f"Processing purchase {purchase_id} for user {user_id}")
+            logger.info(f"Processing purchase {purchase_id} for user {user_id} with config {product_config}")
             
             try:
                 # Get user data
@@ -179,7 +148,7 @@ class PurchaseService:
                 # Update purchase status
                 await self.db.purchases.update_one(
                     {"_id": ObjectId(purchase_id)},
-                    {"$set": {"status": PurchaseStatus.PROCESSING.value}}
+                    {"$set": {"status": "processing"}}
                 )
                 
                 # Step 1: Navigate to product page
@@ -199,32 +168,53 @@ class PurchaseService:
                     }}
                 )
 
-                # Step 2: Fill the gaps
-                logger.info("Filling the gaps and select the type")
-                if not await self.scraper.fill_form_fields_and_select_type():
-                    raise ValueError("Failed to fill form fields or select type")
-                # Update step 2 in the database while preserving step 1
-                await self.db.purchases.update_one(
-                    {"_id": ObjectId(purchase_id)},
-                    {"$set": {
-                        "steps.step2": {
-                            "status": "info", 
-                            "content": "Filling the gaps and select the type"
-                        }
-                    }},
-                    upsert=True
-                )
-                
-                # Step 3: Click Add to Cart
+                # Step 2: Apply product configuration
+                logger.info("Applying product configuration")
+                try:
+                    # Fill quantity
+                    await self.scraper.fill_quantity_fields(quantity)
+                    
+                    # Apply other product options (size, color, etc)
+                    if product_config:
+                        for option, value in product_config.items():
+                            if option != "quantity":  # Skip quantity as it's already handled
+                                logger.info(f"config option: {option}, value:{value}")
+                                await self.scraper.select_product_option(option, value)
+                    
+                    # Update step 2 in the database with success status
+                    await self.db.purchases.update_one(
+                        {"_id": ObjectId(purchase_id)},
+                        {"$set": {
+                            "steps.step2": {
+                                "status": "info", 
+                                "content": f"Successfully applied product configuration: {product_config}"
+                            }
+                        }},
+                        upsert=True
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not apply all product configuration: {e}")
+                    await self.db.purchases.update_one(
+                        {"_id": ObjectId(purchase_id)},
+                        {"$set": {
+                            "steps.step2": {
+                                "status": "warning", 
+                                "content": f"Could not apply all product configuration: {str(e)}"
+                            }
+                        }},
+                        upsert=True
+                    )
+
+                # Step 4: Click Add to Cart
                 logger.info("Clicking 'Add to Cart' button")
                 if not await self.scraper.find_and_click_button(['add_to_cart']):
                     raise ValueError("Failed to find 'Add to Cart' button")
                 
-                # Update step 3 in the database
+                # Update step 4 in the database
                 await self.db.purchases.update_one(
                     {"_id": ObjectId(purchase_id)},
                     {"$set": {
-                        "steps.step3": {
+                        "steps.step4": {
                             "status": "info", 
                             "content": "Clicking 'Add to Cart' button"
                         }
@@ -235,29 +225,12 @@ class PurchaseService:
                 # Wait for cart update
                 await asyncio.sleep(2)
                 
-                # Step 4: Go to checkout
+                # Step 5: Go to checkout
                 parsed_url = urlparse(product_url)
                 base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{'/'.join(parsed_url.path.split('/')[:-1])}"
                 checkout_url = urljoin(base_url, "/checkout")
                 logger.info(f"Navigating to checkout: {checkout_url}")
                 current_url, _ = await self.scraper.scrape_page(checkout_url)
-                
-                # Update step 4 in the database
-                await self.db.purchases.update_one(
-                    {"_id": ObjectId(purchase_id)},
-                    {"$set": {
-                        "steps.step4": {
-                            "status": "info", 
-                            "content": f"Navigating to checkout: {checkout_url}"
-                        }
-                    }}
-                )
-                
-                # Step 5: Fill checkout form
-                logger.info("Filling checkout form")
-                field_types = await self.scraper.detect_form_fields()
-                if field_types["shipping"] or field_types["billing"] or field_types["payment"]:
-                    self.scraper.fill_form_fields(field_types)
                 
                 # Update step 5 in the database
                 await self.db.purchases.update_one(
@@ -265,39 +238,74 @@ class PurchaseService:
                     {"$set": {
                         "steps.step5": {
                             "status": "info", 
-                            "content": "Filling checkout form with user information"
+                            "content": f"Navigating to checkout: {checkout_url}"
                         }
                     }}
                 )
+
+                await asyncio.sleep(5)
                 
-                # Step 6: Check and accept any agreement checkboxes
-                await self._check_agreement_checkboxes()
+                # Step 6: Fill checkout form and retry until successful
+                logger.info("Starting checkout form filling process")
+                iframe_result = False
+                max_retries = 5  # Prevent infinite loops
+                retry_count = 0
                 
-                # Update step 6 in the database
+                while not iframe_result and retry_count < max_retries:
+                    retry_count += 1
+                    logger.info(f"Form filling attempt {retry_count}")
+                    
+                    # Detect and fill form fields
+                    field_types = await self.scraper.detect_form_fields()
+                    
+                    # Log field type counts including unknown fields
+                    for field_type, fields in field_types.items():
+                        if fields:
+                            logger.info(f"Found {len(fields)} {field_type} fields")
+                            if field_type == "unknown":
+                                logger.debug(f"Unknown fields detected: {fields}")
+                    
+                    # Check if we have fields to fill
+                    if (field_types["shipping"] or field_types["billing"] or 
+                        field_types["payment"] or field_types["contact"] or 
+                        field_types["unknown"]):
+                        
+                        # Try to fill all field types including unknown
+                        iframe_result = self.scraper.fill_form_fields(field_types)
+                        
+                        # Handle modern styled inputs with floating labels and peer classes
+                        await self.scraper.handle_modern_styled_inputs()
+                        
+                        # Handle React Select dropdown components
+                        await self.scraper.handle_react_select_fields()
+                        
+                        if not iframe_result and field_types["unknown"]:
+                            logger.warning(f"Form filling may be incomplete due to {len(field_types['unknown'])} unrecognized fields")
+                    
+                    if not iframe_result:
+                        # Try steps 7 and 8
+                        await self._check_agreement_checkboxes()
+                        if not await self.scraper.find_and_click_button(['payment', 'complete_order', 'checkout']):
+                            logger.warning(f"Could not find payment button on attempt {retry_count}")
+                        
+                        # Wait for any page updates before retrying
+                        await asyncio.sleep(3)
+                
+                # Update step 6 in the database with form filling status
+                form_status = "success" if iframe_result else "warning"
+                form_message = "Successfully filled checkout forms" if iframe_result else "Form filling may be incomplete"
+                if not iframe_result and field_types.get("unknown"):
+                    form_message += f" ({len(field_types['unknown'])} unrecognized fields)"
+                
                 await self.db.purchases.update_one(
                     {"_id": ObjectId(purchase_id)},
                     {"$set": {
                         "steps.step6": {
-                            "status": "info", 
-                            "content": "Checking and accepting agreement checkboxes"
+                            "status": form_status,
+                            "content": form_message
                         }
-                    }}
-                )
-                
-                # Step 7: Click payment button
-                logger.info("Clicking payment button")
-                if not await self.scraper.find_and_click_button(['payment', 'complete_order', 'checkout']):
-                    raise ValueError("Failed to find payment button")
-                
-                # Update step 7 in the database
-                await self.db.purchases.update_one(
-                    {"_id": ObjectId(purchase_id)},
-                    {"$set": {
-                        "steps.step7": {
-                            "status": "info", 
-                            "content": "Completing payment process"
-                        }
-                    }}
+                    }},
+                    upsert=True
                 )
                 
                 # Wait for payment processing
@@ -314,12 +322,12 @@ class PurchaseService:
                     await self.db.purchases.update_one(
                         {"_id": ObjectId(purchase_id)},
                         {"$set": {
-                            "status": PurchaseStatus.FAILED.value,
+                            "status": "failed",
                             "error": f"Payment error: {payment_error}",
                             "completed_at": datetime.utcnow()
                         }}
                     )
-                    return
+                    
                 
                 # Success!
                 result = await self.scraper.close_driver()
@@ -328,16 +336,19 @@ class PurchaseService:
                     await self.db.purchases.update_one(
                         {"_id": ObjectId(purchase_id)},
                         {"$set": {
-                            "status": PurchaseStatus.FAILED.value,
+                            "status": "failed",
                             "error": "payment method declined",
                         }}
                     )
+
+                    self.scraper.driver.quit()
+                    logger.info("Selenium WebDriver closed with failed purchase")
                 else:
                     logger.info("Purchase completed successfully")
                     await self.db.purchases.update_one(
                         {"_id": ObjectId(purchase_id)},
                         {"$set": {
-                            "status": PurchaseStatus.COMPLETED.value,
+                            "status": "completed",
                             "completed_at": datetime.utcnow()
                         }}
                     )
@@ -346,9 +357,9 @@ class PurchaseService:
                 logger.error(f"Error during purchase process: {e}")
                 await self.db.purchases.update_one(
                     {"_id": ObjectId(purchase_id)},
-                    {"$set": {"status": PurchaseStatus.FAILED.value, "error": str(e)}}
+                    {"$set": {"status": "failed", "error": str(e)}}
                 )
-            
+                
             finally:
                 # Close the scraper
                 if self.scraper:
@@ -356,6 +367,7 @@ class PurchaseService:
         
         except Exception as e:
             logger.error(f"Error in process_purchase: {e}")
+            pass
     
     async def _check_for_payment_errors(self) -> Optional[str]:
         """Check for payment error alerts and messages."""
@@ -509,4 +521,4 @@ class PurchaseService:
             return purchase
         except Exception as e:
             logger.error(f"Failed to get purchase status: {e}")
-            raise 
+            raise

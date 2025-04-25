@@ -33,7 +33,6 @@ class User(BaseModel):
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
     email: EmailStr
     name: str  # Will be split into first_name and last_name in purchase_service
-    token: str
     shipping_addresses: list[ShippingAddress]
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -44,9 +43,8 @@ class User(BaseModel):
         "json_encoders": {ObjectId: str},
         "json_schema_extra": {
             "example": {
-                "email": "user@example.com",
+                "email": "Customer@example.com",
                 "name": "John Doe",  # Will be split into first_name and last_name
-                "token": "user_auth_token",
                 "shipping_addresses": [
                     {
                         "full_name": "John Doe",

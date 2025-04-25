@@ -1,36 +1,24 @@
 from pydantic import BaseModel, Field, HttpUrl
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
 from bson import ObjectId
 from app.models.user import PyObjectId
 
 class PurchaseStatus(str, Enum):
-    PENDING = "pending"
+    CREATED = "created"
     PROCESSING = "processing"
-    ANALYZING = "analyzing"
-    AUTOMATING = "automating"
-    CHECKOUT = "checkout"
-    PAYMENT = "payment"
     COMPLETED = "completed"
     FAILED = "failed"
-
-class PurchaseStep(BaseModel):
-    url: str
-    status: PurchaseStatus
-    html_snapshot: Optional[str] = None
-    llm_analysis: Optional[Dict[str, Any]] = None
-    automation_code: Optional[str] = None
-    error: Optional[str] = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 class Purchase(BaseModel):
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
     user_id: PyObjectId
     product_url: str
-    current_url: str
-    status: PurchaseStatus = PurchaseStatus.PENDING
-    steps: List[PurchaseStep] = []
+    product_info: Dict[str, Any]
+    config: Optional[Dict[str, Any]] = None
+    status: str = PurchaseStatus.CREATED
+    steps: Dict[str, Dict[str, str]] = {}
     error: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -44,11 +32,24 @@ class Purchase(BaseModel):
             "example": {
                 "user_id": "60d5ec9af682dbd12a0a9fb9",
                 "product_url": "https://example.com/product/123",
-                "current_url": "https://example.com/product/123",
-                "status": "pending",
-                "steps": [],
+                "product_info": {
+                    "name": "Example Product",
+                    "price": "99.99",
+                    "currency": "USD",
+                    "options": {
+                        "size": ["S", "M", "L"],
+                        "color": ["Red", "Blue", "Green"]
+                    }
+                },
+                "config": {
+                    "size": "M",
+                    "color": "blue",
+                    "quantity": 1
+                },
+                "status": "created",
+                "steps": {},
                 "created_at": "2023-11-15T12:00:00.000Z",
                 "updated_at": "2023-11-15T12:00:00.000Z"
             }
         }
-    } 
+    }

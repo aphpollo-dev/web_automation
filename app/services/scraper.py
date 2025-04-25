@@ -9,11 +9,11 @@ import time
 import json
 from typing import Dict, Any, Optional, Tuple, List, Union
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support.ui import Select  # Added this import
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException, ElementClickInterceptedException, JavascriptException
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 import asyncio
 
@@ -77,6 +77,11 @@ class WebScraper:
             chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--window-size=1920,1080")
             
+            # Add WebGL related options to prevent SwiftShader warning
+            chrome_options.add_argument("--disable-software-rasterizer")
+            chrome_options.add_argument("--disable-webgl")
+            chrome_options.add_argument("--disable-webgl2")
+            
             # Add these options to prevent payment handler dialogs
             chrome_options.add_argument("--disable-features=PaymentHandlerMinimal")
             chrome_options.add_experimental_option("prefs", {
@@ -99,7 +104,7 @@ class WebScraper:
         if await self.find_and_click_button(['payment', 'complete_order']):
             # Check if URL changed after clicking button
             logger.info(f"Initial URL: {initial_url}")
-            time.sleep(5)
+            time.sleep(20)
             current_url = self.driver.current_url
             if current_url.split('?')[0].rstrip('/') != initial_url.split('?')[0].rstrip('/'):
                 logger.info(f"URL changed after clicking button: {current_url}")
@@ -117,6 +122,308 @@ class WebScraper:
             self.driver.quit()
             self.driver = None
             logger.info("Selenium WebDriver closed")
+    
+    async def handle_react_select_fields(self) -> None:
+        """Handle React Select dropdown components which require special handling."""
+        try:
+            if not self.driver:
+                raise ValueError("WebDriver not initialized")
+            
+            logger.info("Looking for React Select fields")
+            
+            # Find React Select input fields
+            react_select_inputs = self.driver.find_elements(By.CSS_SELECTOR, "[id^='react-select'][id$='-input']")
+            
+            for input_field in react_select_inputs:
+                if input_field.is_displayed() and input_field.is_enabled():
+                    try:
+                        # Get the field ID to determine what type of field it is
+                        field_id = input_field.get_attribute("id")
+                        parent_container = input_field.find_element(By.XPATH, "./ancestor::div[contains(@class, 'react-select')]")
+                        
+                        # Try to get label or context
+                        context_text = ""
+                        try:
+                            # Look for label in parent containers
+                            for i in range(1, 5):  # Check up to 5 levels up
+                                parent = input_field.find_element(By.XPATH, f"./{'ancestor::div[1]' * i}")
+                                parent_text = parent.text.lower()
+                                if parent_text and len(parent_text) < 100:  # Avoid getting too much text
+                                    context_text = parent_text
+                                    break
+                        except:
+                            pass
+                        
+                        logger.info(f"Found React Select field: {field_id} with context: {context_text}")
+                        
+                        # Determine what data to fill based on context
+                        value_to_fill = None
+                        
+                        if "country" in field_id.lower() or "country" in context_text:
+                            value_to_fill = self.user_data['address']['country']
+                            logger.info(f"Filling country select with: {value_to_fill}")
+                        elif any(word in context_text for word in ["state", "province", "region"]):
+                            value_to_fill = self.user_data['address']['state']
+                            logger.info(f"Filling state select with: {value_to_fill}")
+                        
+                        if value_to_fill:
+                            # Click to open the dropdown
+                            parent_container.click()
+                            time.sleep(0.5)
+                            
+                            # Enter the value in the input field
+                            input_field.send_keys(value_to_fill)
+                            time.sleep(0.5)
+                            
+                            # Try to find and click the matching option
+                            try:
+                                # Look for options that appear after clicking
+                                options = self.driver.find_elements(By.CSS_SELECTOR, "[id^='react-select'][role='option']")
+                                
+                                if options:
+                                    for option in options:
+                                        if value_to_fill.lower() in option.text.lower():
+                                            option.click()
+                                            logger.info(f"Selected option: {option.text}")
+                                            break
+                                else:
+                                    # If no options found, try pressing Enter
+                                    input_field.send_keys(Keys.ENTER)
+                                    logger.info("No options found, pressed Enter")
+                            except Exception as e:
+                                logger.warning(f"Error selecting option: {e}")
+                                # Try pressing Enter as a fallback
+                                input_field.send_keys(Keys.ENTER)
+                    
+                    except Exception as e:
+                        logger.warning(f"Error handling React Select field: {e}")
+            
+            logger.info("React Select field handling complete")
+        except Exception as e:
+            logger.error(f"Error handling React Select fields: {e}")
+    
+    async def handle_modern_styled_inputs(self) -> None:
+        """Handle modern styled inputs with floating labels, peer classes, and other modern UI patterns."""
+        try:
+            if not self.driver:
+                raise ValueError("WebDriver not initialized")
+            
+            logger.info("Looking for modern styled inputs")
+            
+            # Execute JavaScript to find and fill modern styled inputs based on context
+            self.driver.execute_script("""
+                // Helper function to determine field type from context
+                function determineFieldType(context) {
+                    context = context.toLowerCase();
+                    if (context.includes('name') || context.includes('full name') || context.includes('fullname')) {
+                        return 'name';
+                    } else if (context.includes('email')) {
+                        return 'email';
+                    } else if (context.includes('phone') || context.includes('telephone') || context.includes('mobile')) {
+                        return 'phone';
+                    } else if (context.includes('address') && !context.includes('address 2') && !context.includes('line 2')) {
+                        return 'address';
+                    } else if (context.includes('address 2') || context.includes('line 2') || context.includes('apt') || context.includes('suite')) {
+                        return 'address2';
+                    } else if (context.includes('city')) {
+                        return 'city';
+                    } else if (context.includes('state') || context.includes('province') || context.includes('region')) {
+                        return 'state';
+                    } else if (context.includes('zip') || context.includes('postal')) {
+                        return 'zip';
+                    } else if (context.includes('country')) {
+                        return 'country';
+                    } else if (context.includes('card') && context.includes('number')) {
+                        return 'cardnumber';
+                    } else if (context.includes('cvv') || context.includes('cvc') || context.includes('security code')) {
+                        return 'cvv';
+                    } else if (context.includes('expiry') || context.includes('expiration')) {
+                        return 'expiry';
+                    }
+                    return 'unknown';
+                }
+                
+                // Find all inputs with modern styling patterns
+                const modernInputSelectors = [
+                    'input.peer', 
+                    'input.text-blue-gray-700',
+                    'input.bg-transparent',
+                    'input.border-blue-gray-200',
+                    'input[name="fullName"]',  // Add specific selector for fullName
+                    'input.placeholder-shown\\:border',
+                    'input.focus\\:outline',
+                    'input.transition-all',
+                    'input.rounded-\\[7px\\]',
+                    'input.w-full.h-full',
+                    'input.code',
+                    '.form-control',
+                    '.form-input',
+                    '.input-field',
+                    '.chakra-input',
+                    '.mui-input',
+                    '.ant-input'
+                ];
+                
+                // Try each selector
+                for (const selector of modernInputSelectors) {
+                    try {
+                        const inputs = document.querySelectorAll(selector);
+                        console.log(`Found ${inputs.length} inputs with selector: ${selector}`);
+                        
+                        for (const input of inputs) {
+                            if (input.type === 'hidden' || !input.offsetParent) continue; // Skip hidden inputs
+                            
+                            // Get context from parent elements
+                            let context = '';
+                            let parent = input.parentElement;
+                            for (let i = 0; i < 3 && parent; i++) { // Check up to 3 levels up
+                                context += ' ' + (parent.textContent || '');
+                                
+                                // Also check for labels
+                                const labels = parent.querySelectorAll('label');
+                                for (const label of labels) {
+                                    context += ' ' + (label.textContent || '');
+                                }
+                                
+                                parent = parent.parentElement;
+                            }
+                            
+                            // Also check for aria-label and placeholder
+                            context += ' ' + (input.getAttribute('aria-label') || '');
+                            context += ' ' + (input.getAttribute('placeholder') || '');
+                            context += ' ' + (input.name || '');
+                            context += ' ' + (input.id || '');
+                            
+                            // Determine field type from context
+                            const fieldType = determineFieldType(context);
+                            console.log(`Field type determined as: ${fieldType} for context: ${context.substring(0, 50)}...`);
+                            
+                            // Fill the field based on type
+                            if (fieldType === 'name') {
+                                input.value = arguments[0] + ' ' + arguments[1];
+                                console.log('Filled name field');
+                            } else if (fieldType === 'email') {
+                                input.value = arguments[2];
+                                console.log('Filled email field');
+                            } else if (fieldType === 'phone') {
+                                input.value = arguments[3];
+                                console.log('Filled phone field');
+                            } else if (fieldType === 'address') {
+                                input.value = arguments[4];
+                                console.log('Filled address field');
+                            } else if (fieldType === 'address2') {
+                                input.value = arguments[5];
+                                console.log('Filled address2 field');
+                            } else if (fieldType === 'city') {
+                                input.value = arguments[6];
+                                console.log('Filled city field');
+                            } else if (fieldType === 'state') {
+                                input.value = arguments[7];
+                                console.log('Filled state field');
+                            } else if (fieldType === 'zip') {
+                                input.value = arguments[8];
+                                console.log('Filled zip field');
+                            } else if (fieldType === 'country') {
+                                input.value = arguments[9];
+                                console.log('Filled country field');
+                            } else if (fieldType === 'cardnumber') {
+                                input.value = arguments[10];
+                                console.log('Filled card number field');
+                            } else if (fieldType === 'cvv') {
+                                input.value = arguments[11];
+                                console.log('Filled CVV field');
+                            } else if (fieldType === 'expiry') {
+                                input.value = arguments[12] + '/' + arguments[13].slice(-2);
+                                console.log('Filled expiry field');
+                            }
+                            
+                            // Trigger events to ensure the value is registered
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                            
+                            // For modern frameworks, we need to trigger a focus event first, then blur
+                            input.dispatchEvent(new Event('focus', { bubbles: true }));
+                            setTimeout(() => {
+                                input.dispatchEvent(new Event('blur', { bubbles: true }));
+                            }, 100);
+                        }
+                    } catch (e) {
+                        console.error(`Error with selector ${selector}:`, e);
+                    }
+                }
+                
+                // Specifically handle the example class pattern
+                try {
+                    const specificInputs = document.querySelectorAll('input.code.peer.w-full.h-full.bg-transparent.text-blue-gray-700, input.peer.w-full.h-full.bg-transparent.text-blue-gray-700');
+                    console.log(`Found ${specificInputs.length} inputs with specific class pattern`);
+                    
+                    for (const input of specificInputs) {
+                        if (input.type === 'hidden' || !input.offsetParent) continue; // Skip hidden inputs
+                        
+                        // Get context from parent elements
+                        let context = '';
+                        let parent = input.parentElement;
+                        for (let i = 0; i < 3 && parent; i++) { // Check up to 3 levels up
+                            context += ' ' + (parent.textContent || '');
+                            parent = parent.parentElement;
+                        }
+                        
+                        // Determine field type from context
+                        const fieldType = determineFieldType(context);
+                        console.log(`Specific pattern field type: ${fieldType}`);
+                        
+                        // Fill the field based on type (same logic as above)
+                        if (fieldType === 'name') {
+                            input.value = arguments[0] + ' ' + arguments[1];
+                        } else if (fieldType === 'email') {
+                            input.value = arguments[2];
+                        } else if (fieldType === 'phone') {
+                            input.value = arguments[3];
+                        } else if (fieldType === 'address') {
+                            input.value = arguments[4];
+                        } else if (fieldType === 'address2') {
+                            input.value = arguments[5];
+                        } else if (fieldType === 'city') {
+                            input.value = arguments[6];
+                        } else if (fieldType === 'state') {
+                            input.value = arguments[7];
+                        } else if (fieldType === 'zip') {
+                            input.value = arguments[8];
+                        } else if (fieldType === 'country') {
+                            input.value = arguments[9];
+                        }
+                        
+                        // Trigger events
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                        input.dispatchEvent(new Event('focus', { bubbles: true }));
+                        setTimeout(() => {
+                            input.dispatchEvent(new Event('blur', { bubbles: true }));
+                        }, 100);
+                    }
+                } catch (e) {
+                    console.error('Error handling specific class pattern:', e);
+                }
+            """,
+            self.user_data['first_name'],
+            self.user_data['last_name'],
+            self.user_data['email'],
+            self.user_data['phone'],
+            self.user_data['address']['street'],
+            self.user_data['address']['apt'],
+            self.user_data['address']['city'],
+            self.user_data['address']['state'],
+            self.user_data['address']['zip'],
+            self.user_data['address']['country'],
+            self.user_data['payment_method']['card_number'],
+            self.user_data['payment_method']['cvv'],
+            self.user_data['payment_method']['expiry_month'],
+            self.user_data['payment_method']['expiry_year']
+            )
+            
+            logger.info("Modern styled inputs handling complete")
+        except Exception as e:
+            logger.error(f"Error handling modern styled inputs: {e}")
     
     async def scrape_page(self, url: str) -> Tuple[str, str]:
         """Scrape a web page and return only the body content to reduce token usage.
@@ -142,6 +449,12 @@ class WebScraper:
             
             # Check for agreement/consent checkboxes and click them
             await self.check_agreement_checkboxes()
+            
+            # Handle modern styled inputs with floating labels and peer classes
+            await self.handle_modern_styled_inputs()
+            
+            # Handle React Select dropdown components
+            await self.handle_react_select_fields()
             
             # Extract only the body element to reduce token usage
             try:
@@ -203,6 +516,375 @@ class WebScraper:
             
         except Exception as e:
             logger.error(f"Error during page scrolling: {e}")
+    
+    async def fill_quantity_fields(self, quantity: int) -> bool:
+        """Find and fill quantity input fields on the page.
+        
+        Args:
+            quantity: The quantity value to set
+            
+        Returns:
+            True if quantity field was found and filled, False otherwise
+        """
+        try:
+            if not self.driver:
+                logger.error("WebDriver not initialized")
+                return False
+            
+            logger.info(f"Looking for quantity input field to set value: {quantity}")
+            
+            # Common selectors for quantity input fields
+            quantity_selectors = [
+                "//input[(contains(@id, 'quantity') or contains(@name, 'quantity') or contains(@class, 'quantity'))]",
+                "//input[(contains(@id, 'quantity') or contains(@name, 'quantity') or contains(@class, 'quantity'))]",
+                "//input[(contains(@id, 'qty') or contains(@name, 'qty') or contains(@class, 'qty'))]",
+                "//input[(contains(@id, 'qty') or contains(@name, 'qty') or contains(@class, 'qty'))]",
+                "//input[(contains(@aria-label, 'quantity') or contains(@placeholder, 'quantity'))]",
+                "//input[(contains(@aria-label, 'quantity') or contains(@placeholder, 'quantity'))]",
+                "//input[@type='number'][@min]",  # Often quantity fields have a min attribute
+                "//select[contains(@id, 'qty') or contains(@name, 'qty') or contains(@class, 'qty')]",
+                # Added label-based selectors
+                "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'quantity')]/following-sibling::input",
+                "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'qty')]/following-sibling::input",
+                "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'quantity')]/preceding-sibling::input",
+                "//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'qty')]/preceding-sibling::input",
+                # Added span-based selectors
+                "//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'quantity')]/following-sibling::input",
+                "//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'qty')]/following-sibling::input",
+                "//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'quantity')]/preceding-sibling::input",
+                "//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'qty')]/preceding-sibling::input",
+                # Added parent-based selectors
+                "//div[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'quantity')]//input",
+                "//div[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'qty')]//input"
+            ]
+            
+            for selector in quantity_selectors:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, selector)
+                    for element in elements:
+                        if element.is_displayed():
+                            # Scroll element into view
+                            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+                            time.sleep(0.5)
+                            
+                            tag_name = element.tag_name.lower()
+                            if tag_name == 'select':
+                                # Handle select dropdown
+                                options = element.find_elements(By.TAG_NAME, "option")
+                                # Find the option closest to our desired quantity
+                                closest_option = None
+                                closest_diff = float('inf')
+                                
+                                for option in options:
+                                    try:
+                                        option_value = int(option.get_attribute("value"))
+                                        diff = abs(option_value - quantity)
+                                        if diff < closest_diff:
+                                            closest_diff = diff
+                                            closest_option = option
+                                    except (ValueError, TypeError):
+                                        continue
+                                
+                                if closest_option:
+                                    logger.info(f"Setting quantity dropdown to value: {closest_option.get_attribute('value')}")
+                                    closest_option.click()
+                                    return True
+                                
+                            else:
+                                # Handle input field
+                                try:
+                                    # First try to clear any existing value trackers
+                                    self.driver.execute_script("""
+                                        if (arguments[0]._valueTracker) {
+                                            arguments[0]._valueTracker.setValue('');
+                                        }
+                                    """, element)
+                                    
+                                    # Try to trigger React-style onChange handler if it exists
+                                    self.driver.execute_script("""
+                                        if (arguments[0].__reactEventHandlers) {
+                                            arguments[0].__reactEventHandlers.onChange({target: {value: arguments[1]}});
+                                        }
+                                    """, element, str(quantity))
+                                    
+                                    # Use native input value setter for framework compatibility
+                                    self.driver.execute_script("""
+                                        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                        nativeInputValueSetter.call(arguments[0], arguments[1]);
+                                        
+                                        // Dispatch events in the correct order
+                                        arguments[0].dispatchEvent(new Event('focus', { bubbles: true }));
+                                        arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                                        arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+                                        
+                                        // Move focus to body element after setting value
+                                        document.body.focus();
+                                        arguments[0].dispatchEvent(new Event('blur', { bubbles: true }));
+                                        
+                                        // For React-style frameworks
+                                        if (window.React && window.React.events) {
+                                            window.React.events.emit('change', arguments[1]);
+                                        }
+                                    """, element, str(quantity))
+                                    
+                                    # Verify the value was set
+                                    actual_value = element.get_attribute('value')
+                                    if actual_value != str(quantity):
+                                        # If value didn't stick, try direct property setting
+                                        element.clear()
+                                        element.send_keys(str(quantity))
+                                        
+                                    # Add a small delay to let framework updates process
+                                    time.sleep(0.5)
+                                    
+                                    logger.info(f"Set quantity input field to value: {quantity}")
+                                    return True
+                                    
+                                except Exception as e:
+                                    logger.debug(f"Error setting quantity value: {e}")
+                                    try:
+                                        # Fallback to basic Selenium actions
+                                        element.clear()
+                                        element.send_keys(str(quantity))
+                                        time.sleep(0.5)
+                                        return True
+                                    except:
+                                        return False
+                except Exception as e:
+                    logger.debug(f"Error with quantity selector {selector}: {e}")
+            
+            # If no direct quantity field found, look for quantity buttons (+ and -)
+            logger.info("No direct quantity input found, looking for quantity adjustment buttons")
+            
+            # Find elements that might be quantity adjustment buttons
+            plus_button_selectors = [
+                "//button[contains(@class, 'plus') or contains(@class, 'increment') or contains(@class, 'increase')]",
+                "//button[contains(text(), '+')]",
+                "//a[contains(@class, 'plus') or contains(@class, 'increment') or contains(@class, 'increase')]",
+                "//a[contains(text(), '+')]",
+                "//span[contains(@class, 'plus') or contains(@class, 'increment') or contains(@class, 'increase')]",
+                "//span[contains(text(), '+')]",
+                "//div[contains(@class, 'plus') or contains(@class, 'increment') or contains(@class, 'increase')]",
+                "//div[contains(text(), '+')]"
+            ]
+            
+            for selector in plus_button_selectors:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, selector)
+                    for element in elements:
+                        if element.is_displayed():
+                            # Try to find the quantity display (often between +/- buttons)
+                            logger.info("find quantity display")
+                            quantity_display = None
+                            
+                            # Check for a display element nearby
+                            try:
+                                # Look for siblings or nearby elements that might show the quantity
+                                display_elements = self.driver.find_elements(
+                                    By.XPATH, 
+                                    f"//input[ancestor::div[contains(., '+')]] | //span[ancestor::div[contains(., '+')]]"
+                                )
+                                
+                                for display in display_elements:
+                                    if display.is_displayed():
+                                        quantity_display = display
+                                        break
+                            except:
+                                pass
+                            
+                            # Scroll to the button
+                            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+                            time.sleep(0.5)
+                            
+                            # Click the + button until we reach the desired quantity
+                            current_qty = 1  # Default starting quantity
+                            
+                            # Try to get current quantity if display element was found
+                            if quantity_display:
+                                try:
+                                    if quantity_display.tag_name.lower() == 'input':
+                                        current_qty = int(quantity_display.get_attribute('value') or '1')
+                                    else:
+                                        current_qty = int(quantity_display.text.strip() or '1')
+                                except (ValueError, TypeError):
+                                    current_qty = 1
+                            
+                            # Click + button until we reach desired quantity
+                            clicks_needed = max(0, quantity - current_qty)
+                            logger.info(f"Current quantity: {current_qty}, clicking + button {clicks_needed} times")
+                            
+                            for _ in range(clicks_needed):
+                                try:
+                                    self.driver.execute_script("arguments[0].click();", element)
+                                    time.sleep(0.2)  # Small delay between clicks
+                                except:
+                                    try:
+                                        element.click()
+                                        time.sleep(0.2)
+                                    except:
+                                        logger.warning("Failed to click + button")
+                                        break
+                            
+                            logger.info(f"Adjusted quantity using + button approximately to: {quantity}")
+                            return True
+                except Exception as e:
+                    logger.debug(f"Error with plus button selector {selector}: {e}")
+            
+            logger.warning("No quantity input field or adjustment buttons found")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error filling quantity field: {e}")
+            return False
+
+    async def select_product_option(self, option_name: str, option_value: str) -> bool:
+        """Select a product option like size, color, etc.
+        
+        Args:
+            option_name: Name of the option (e.g., 'size', 'color')
+            option_value: Value to select (e.g., 'M', 'Blue')
+            
+        Returns:
+            True if option was successfully selected, False otherwise
+        """
+        try:
+            # Debug logging
+            logger.info(f"Attempting to select option '{option_name}' with value '{option_value}'")
+            
+            # Common selectors for product options
+            selectors = [
+                # Modern UI selectors
+                f"//button[@role='option']//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{option_value.lower()}')]/ancestor::button",
+                f"//*[@role='option' and descendant::*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{option_value.lower()}')]]",
+                f"//button[descendant::*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{option_value.lower()}')]]",
+                
+                # Direct element selectors
+                f"//select[contains(@id, '{option_name}') or contains(@name, '{option_name}') or contains(@class, '{option_name}')]",
+                f"//div[contains(@class, 'product-options')]//select[contains(@id, '{option_name}')]",
+                f"//div[contains(@class, 'variant')]//select[contains(@id, '{option_name}')]",
+                f"//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{option_name}')]",
+                f"//span[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{option_value}')]",
+                
+                # Button and div selectors with expanded attributes
+                f"//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{option_value.lower()}')]",
+                f"//button[@role='option']//span[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{option_value.lower()}')]/ancestor::button",
+                f"//button[.//span[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{option_value.lower()}')]]",
+                f"//div[contains(@class, 'variant')]//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{option_value.lower()}')]",
+                
+                # Role-based selectors
+                f"//*[@role='option' and contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{option_value.lower()}')]",
+                f"//*[@role='option']//span[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{option_value.lower}')]/ancestor::*[@role='option']",
+                
+                # Radio button selectors
+                f"//input[@type='radio' and (contains(@name, '{option_name}') or contains(@class, '{option_name}') or contains(@value, '{option_value}'))]",
+                f"//input[@type='radio' and contains(text(), '{option_value}')]",
+                
+                
+                # Custom attribute selectors
+                f"//*[@data-{option_name}='{option_value}']",
+                f"//*[@data-variant='{option_value}']",
+                f"//*[@data-option='{option_value}']",
+                f"//*[@data-selection='{option_value}']",
+                
+                # Nested selectors for complex structures
+                f"//div[contains(@class, 'variant-wrapper')]//div[contains(., '{option_value}')]",
+                f"//div[contains(@class, 'swatch')]//div[contains(., '{option_value}')]",
+                f"//div[contains(@class, 'option')]//div[contains(., '{option_value}')]",
+                
+                # Fallback selectors
+                f"//*[contains(@option-value, '{option_value}') or contains(@data-option-value, '{option_value}') or contains(@value, '{option_value}')]",
+                f"//*[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{option_value}')]",
+            ]
+            
+            for selector in selectors:
+                elements = self.driver.find_elements(By.XPATH, selector)
+                logger.info(f" selector: {selector}")
+                for element in elements:
+                    
+                    try:
+                        # Try to scroll element into view first
+                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+                        time.sleep(0.5)
+                        
+                        # Check if element is displayed or can be interacted with
+                        is_displayed = element.is_displayed()
+                        is_enabled = element.is_enabled()
+                        is_clickable = False
+                        
+                        try:
+                            # Try to check if element is clickable
+                            WebDriverWait(self.driver, 2).until(
+                                EC.element_to_be_clickable((By.XPATH, f"//*[@id='{element.get_attribute('id')}']"))
+                            )
+                            is_clickable = True
+                        except:
+                            pass
+                        
+                        if is_displayed or is_enabled or is_clickable:
+                            try:
+                                # If it's a select element
+                                if element.tag_name == 'select':
+                                    select = Select(element)
+                                    # Try exact match first
+                                    try:
+                                        select.select_by_value(option_value)
+                                    except:
+                                        # Try case-insensitive text match
+                                        for option in select.options:
+                                            if option_value.lower() in option.text.lower():
+                                                select.select_by_visible_text(option.text)
+                                                break
+                                # If it's a button or div (likely a swatch or option tile)
+                                elif element.tag_name in ['button', 'div', 'span', 'label']:
+                                    logger.info(f"Selecting option {option_name} with value {option_value} using element {element.get_attribute('outerHTML')}")
+                                    # Try multiple click methods
+                                    try:
+                                        # Try JavaScript click first
+                                        self.driver.execute_script("arguments[0].click();", element)
+                                    except:
+                                        try:
+                                            # Try ActionChains click
+                                            ActionChains(self.driver).move_to_element(element).click().perform()
+                                        except:
+                                            # Try regular click
+                                            element.click()
+                                # If it's a radio button
+                                elif element.tag_name == 'input' and element.get_attribute('type') == 'radio':
+                                    if not element.is_selected():
+                                        try:
+                                            self.driver.execute_script("arguments[0].click();", element)
+                                        except:
+                                            element.click()
+                                
+                                # Wait for any dynamic updates
+                                await asyncio.sleep(1)
+                                
+                                # Verify the selection was successful
+                                if element.tag_name == 'select':
+                                    selected_option = Select(element).first_selected_option
+                                    if option_value.lower() in selected_option.text.lower():
+                                        return True
+                                elif element.tag_name == 'input' and element.get_attribute('type') == 'radio':
+                                    if element.is_selected():
+                                        return True
+                                else:
+                                    # For other elements, assume success if we got here
+                                    return True
+                                    
+                            except Exception as e:
+                                logger.debug(f"Error selecting option {option_name}: {e}")
+                                continue
+                    except Exception as e:
+                        logger.debug(f"Error with element for selector {selector}: {e}")
+                        continue
+            
+            logger.warning(f"Could not find or select option {option_name} with value {option_value}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error in select_product_option: {e}")
+            return False
+
     
     async def find_and_click_button(self, button_types: List[str]) -> bool:
         """Find and click a button when URL doesn't change.
@@ -463,15 +1145,18 @@ class WebScraper:
                 "billing": [],
                 "shipping": [],
                 "payment": [],
-                "contact": []
+                "contact": [],
+                "unknown": [],  # Added unknown type for unrecognized fields
+                "styled": []    # Added specifically for modern styled inputs
             }
+            logger.info(f"Field types: {field_types}")
             
-            # Common field identifiers
+            # Common field identifiers with expanded patterns
             field_identifiers = {
-                "billing": ["billing", "bill to"],
-                "shipping": ["shipping", "ship to", "delivery"],
-                "payment": ["payment", "card", "credit", "cvv", "cvc", "expir"],
-                "contact": ["email", "phone", "contact"]
+                "billing": ["billing", "bill to", "bill address", "billing address", "bill information"],
+                "shipping": ["shipping", "ship to", "delivery", "shipping address", "ship address", "delivery address", "recipient"],
+                "payment": ["payment", "card", "credit", "cvv", "cvc", "expir", "expiry", "expiration", "card number", "cardholder", "security code", "payment method"],
+                "contact": ["email", "phone", "contact", "mobile", "telephone", "e-mail", "customer", "account"]
             }
             
             # Find all input fields
@@ -497,6 +1182,9 @@ class WebScraper:
                     all_text = (element_id + " " + element_name + " " + element_class + " " + 
                                element_placeholder + " " + element_label).lower()
                     
+                    # Flag to track if field type was identified
+                    field_type_found = False
+                    
                     # Check which type of field it is
                     for field_type, identifiers in field_identifiers.items():
                         for identifier in identifiers:
@@ -519,7 +1207,7 @@ class WebScraper:
         
         except Exception as e:
             logger.error(f"Error detecting form fields: {e}")
-            return {"billing": [], "shipping": [], "payment": [], "contact": []}
+            return {"billing": [], "shipping": [], "payment": [], "contact": [], "unknown": []}
     
     def fill_form_fields(self, field_types: Dict[str, List[str]]) -> bool:
         """Fill form fields with user data.
@@ -540,12 +1228,14 @@ class WebScraper:
             # Convert user data to JavaScript
             user_data_js = json.dumps(self.user_data)
             
-            # Create JavaScript to fill the fields
+            # Create JavaScript to fill the fields with improved automation
             fill_script = f"""
             const userData = {user_data_js};
             let filledFields = 0;
             
-            // Helper function to fill an input field
+            console.log('Starting enhanced form automation...');
+            
+            // Helper function to fill an input field with enhanced framework support
             function fillField(selector, value) {{
                 const field = eval(selector);
                 if (field) {{
@@ -566,21 +1256,95 @@ class WebScraper:
                         }}
                         return false;
                     }} else {{
-                        // Handle regular input fields
-                        field.value = value;
-                        field.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        field.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        filledFields++;
-                        return true;
+                        // Enhanced input field handling
+                        try {{
+                            // Try to clear any existing value trackers (React)
+                            if (field._valueTracker) {{
+                                field._valueTracker.setValue('');
+                            }}
+                            
+                            // Try React event handlers
+                            if (field.__reactEventHandlers) {{
+                                field.__reactEventHandlers.onChange({{target: {{value: value}}}});
+                            }}
+                            
+                            // Use native input value setter for framework compatibility
+                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            nativeInputValueSetter.call(field, value);
+                            
+                            // Dispatch multiple events for framework detection
+                            field.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            field.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            field.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+                            
+                            filledFields++;
+                            return true;
+                        }} catch (e) {{
+                            console.error('Error filling field:', e);
+                            // Fallback to basic value setting
+                            field.value = value;
+                            field.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            field.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            filledFields++;
+                            return true;
+                        }}
                     }}
                 }}
                 return false;
             }}
             
+            // Enhanced email field detection
+            const emailSelectors = [
+                'input[name="email"]',
+                'input[type="email"]',
+                'input[autocomplete="email"]',
+                'input.email',
+                'input#email'
+            ];
+            
+            let emailField = null;
+            for (const selector of emailSelectors) {{
+                emailField = document.querySelector(selector);
+                if (emailField) {{
+                    console.log(`Found email input using selector: ${{selector}}`);
+                    fillField(`document.querySelector('${{selector}}')`, userData.email);
+                    break;
+                }}
+            }}
+            
+            // Enhanced name field handling
+            const nameSelectors = [
+                'input[name="fullName"]',
+                'input[name="full_name"]',
+                'input[name="name"]',
+                'input[autocomplete="name"]',
+                'input.full-name',
+                'input#fullName',
+                'input#full_name',
+                'input#name'
+            ];
+            
+            let nameField = null;
+            for (const selector of nameSelectors) {{
+                nameField = document.querySelector(selector);
+                if (nameField) {{
+                    console.log(`Found name input using selector: ${{selector}}`);
+                    fillField(`document.querySelector('${{selector}}')`, userData.first_name + ' ' + userData.last_name);
+                    break;
+                }}
+            }}
+            
             // Fill billing fields
             for (const selector of {json.dumps(field_types['billing'])}) {{
-                // Try common billing field names
-                if (selector.toLowerCase().includes('first') || selector.toLowerCase().includes('name') && !selector.toLowerCase().includes('last')) {{
+                // Try full name field first
+                if (selector.toLowerCase().includes('full_name') || 
+                    (selector.toLowerCase().includes('name') && 
+                    !selector.toLowerCase().includes('first') && 
+                    !selector.toLowerCase().includes('last') && 
+                    !selector.toLowerCase().includes('user'))) {{
+                    fillField(selector, userData.first_name + ' ' + userData.last_name); 
+                    setTimeout(() => {{}}, 1000);
+                }} else if (selector.toLowerCase().includes('first') || selector.toLowerCase().includes('name') && !selector.toLowerCase().includes('last')) {{
                     fillField(selector, userData.first_name); setTimeout(() => {{}}, 1000);
                 }} else if (selector.toLowerCase().includes('last')) {{
                     fillField(selector, userData.last_name); setTimeout(() => {{}}, 1000);
@@ -648,6 +1412,7 @@ class WebScraper:
                     fillField(selector, userData.phone);
                 }}
             }}
+            
             // Check "same as shipping" checkbox if billing is same as shipping
             for (const selector of {json.dumps(field_types.get('same_as_shipping', []))}) {{
                 const checkbox = eval(selector);
@@ -656,6 +1421,42 @@ class WebScraper:
                     checkbox.dispatchEvent(new Event('change', {{ bubbles: true }}));
                     filledFields++;
                 }}
+            }}
+            
+            // Try to inject a script into the page context for enhanced framework support
+            try {{
+                const scriptElement = document.createElement('script');
+                scriptElement.textContent = `
+                    (function() {{
+                        // This runs in the page context, not in the console sandbox
+                        const nameField = document.querySelector('input[name="fullName"]');
+                        const emailField = document.querySelector('input[name="email"]') || 
+                                        document.querySelector('input[type="email"]');
+                        
+                        if (nameField) {{
+                            // Try to set value through any custom property or method
+                            if (nameField._valueTracker) nameField._valueTracker.setValue('');
+                            if (nameField.__reactEventHandlers) nameField.__reactEventHandlers.onChange({{target: {{value: '${{userData.first_name}} ${{userData.last_name}}'}}}});
+                            
+                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            nativeInputValueSetter.call(nameField, '${{userData.first_name}} ${{userData.last_name}}');
+                            nameField.dispatchEvent(new Event('input', {{bubbles: true}}));
+                        }}
+                        
+                        if (emailField) {{
+                            if (emailField._valueTracker) emailField._valueTracker.setValue('');
+                            if (emailField.__reactEventHandlers) emailField.__reactEventHandlers.onChange({{target: {{value: '${{userData.email}}'}}}});
+                            
+                            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            nativeInputValueSetter.call(emailField, '${{userData.email}}');
+                            emailField.dispatchEvent(new Event('input', {{bubbles: true}}));
+                        }}
+                    }})();
+                `;
+                document.body.appendChild(scriptElement);
+                document.body.removeChild(scriptElement);
+            }} catch (e) {{
+                console.log('Enhanced framework support injection failed:', e);
             }}
             
             return filledFields;
@@ -673,220 +1474,131 @@ class WebScraper:
                 iframe_found = False
                 if stripe_iframes:
                     logger.info(f"Found {len(stripe_iframes)} potential payment iframes")
+                    
+                    # Define field types and their selectors
+                    field_selectors = {
+                        'card': {
+                            'selectors': "input[name='number'], input[name='cardnumber'], input[autocomplete='cc-number'],input[data-elements-stable-field-name='cardNumber']",
+                            'value': self.user_data['payment_method']['card_number']
+                        },
+                        'expiry': {
+                            'selectors': "input[name='exp-date'], input[name='expiry'], input[data-elements-stable-field-name='cardExpiry'], input[autocomplete='cc-exp']",
+                            'value': f"{self.user_data['payment_method']['expiry_month']}/{self.user_data['payment_method']['expiry_year'][-2:]}"
+                        },
+                        'cvv': {
+                            'selectors': "input[name='verification_value'], input[name='cvc'], input[autocomplete='cc-csc'], input[data-elements-stable-field-name='cardCvc']",
+                            'value': self.user_data['payment_method']['cvv']
+                        },
+                        'name': {
+                            'selectors': "input[name='name'], input[name='cardholder-name'], input[name='cardholder'], input[name='nameOnAccount'], input[data-elements-stable-field-name='cardHolder'], input[autocomplete='cc-name']",
+                            'value': self.user_data['payment_method']['card_holder']
+                        }
+                    }
+
+                    # Try single iframe approach first
                     for iframe in stripe_iframes:
                         try:
                             self.driver.switch_to.frame(iframe)
-                            # Verify if this is the right frame by checking for card input
-                            card_inputs = self.driver.find_elements(
-                                By.CSS_SELECTOR, 
-                                "input[name='number'], input[name='cardnumber'], input[data-elements-stable-field-name='cardNumber']"
-                            )
-                            if card_inputs:
-                                logger.info("Found correct payment iframe with card field")
+                            card_input = self.driver.find_element(By.CSS_SELECTOR, field_selectors['card']['selectors'])
+                            cvv_input = self.driver.find_element(By.CSS_SELECTOR, field_selectors['cvv']['selectors'])
+                            if card_input and cvv_input:
                                 iframe_found = True
+                                logger.info("Found single iframe with all fields")
                                 break
-                            else:
-                                # Not the right frame, switch back
-                                self.driver.switch_to.default_content()
                         except Exception as e:
-                            logger.warning(f"Error checking iframe: {e}")
+                            logger.debug(f"Single iframe approach failed: {e}")
                             self.driver.switch_to.default_content()
-                
-                if not iframe_found:
-                    logger.warning("Could not find payment iframe with card field, continuing with regular form")
-                
-                # Wait for payment fields with more robust selectors
-                card_selectors = "input[name='number'], input[name='cardnumber'], input[data-elements-stable-field-name='cardNumber']"
-                expiry_selectors = "input[name='expiry']"
-                cvv_selectors = "input[name='verification_value'], input[name='cvc'], input[data-elements-stable-field-name='cardCvc']"
-                name_selectors = "input[name='name'], input[name='cardholder-name']"
-                
-                # Fill card number with better error handling
-                try:
-                    # Wait longer and ensure element is fully ready
-                    card_number_input = WebDriverWait(self.driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, card_selectors))
-                    )
-                    
-                    # Make sure the element is in view before interacting with it
-                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card_number_input)
-                    time.sleep(1)  # Give more time for scrolling to settle
-                    
-                    # Use pure JavaScript for interaction instead of ActionChains
-                    self.driver.execute_script("arguments[0].focus(); arguments[0].click();", card_number_input)
-                    time.sleep(0.5)
-                    
-                    # Clear the field using JavaScript
-                    self.driver.execute_script("arguments[0].value = '';", card_number_input)
-                    time.sleep(0.5)
-                    
-                    # Set the value using JavaScript and trigger appropriate events
-                    self.driver.execute_script("""
-                        arguments[0].value = arguments[1];
-                        arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
-                        arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
-                    """, card_number_input, self.user_data['payment_method']['card_number'])
-                    
-                    logger.info("Successfully filled card number using JavaScript method")
-                except Exception as e:
-                    logger.warning(f"Card number input failed: {e}, trying alternative method")
-                    try:
-                        # Try a more aggressive approach - character by character input
-                        self.driver.execute_script("""
-                            const input = arguments[0];
-                            const value = arguments[1];
-                            
-                            // Focus and clear
-                            input.focus();
-                            input.value = '';
-                            
-                            // Type character by character with small delays
-                            for (let i = 0; i < value.length; i++) {
-                                input.value += value[i];
-                                input.dispatchEvent(new Event('input', { bubbles: true }));
-                            }
-                            
-                            // Final change event
-                            input.dispatchEvent(new Event('change', { bubbles: true }));
-                        """, card_number_input, self.user_data['payment_method']['card_number'])
+                            iframe_found = False
+                            continue
+                    if iframe_found:
+                        for field_type, field_info in field_selectors.items():
+                            try:
+                                field = WebDriverWait(self.driver, 10).until(
+                                    EC.presence_of_element_located((By.CSS_SELECTOR, field_info['selectors']))
+                                )
+                                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", field)
+                                time.sleep(0.3)
+                                self.driver.execute_script("arguments[0].focus(); arguments[0].click();", field)
+                                time.sleep(0.3)
+                                self.driver.execute_script("arguments[0].value = '';", field)
+                                time.sleep(0.3)
+                                self.driver.execute_script("""
+                                    arguments[0].value = arguments[1];
+                                    arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                                    arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+                                """, field, field_info['value'])
+                                time.sleep(0.3)
+                            except Exception as e:
+                                logger.debug(f"Error filling {field_type} field: {e}")
+                                iframe_found = False
+                                self.driver.switch_to.default_content()
+                                break
+                    # If single iframe approach failed, try multiple iframes approach
+                    if not iframe_found:
+                        logger.info("Single iframe approach failed, trying multiple iframes")
+                        card_field_found = False  # Track if we've already found a card field
                         
-                        logger.info("Successfully filled card number using character-by-character method")
-                    except Exception as inner_e:
-                        logger.error(f"All card number input methods failed: {inner_e}")
-                
-                time.sleep(0.1)  # Wait between fields
-                
-                # Similar pattern for expiry
-                try:
-                    expiry_input = WebDriverWait(self.driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, expiry_selectors)))
-                
-                    # Scroll element into view with margin to avoid overlapping elements
-                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); window.scrollBy(0, -100);", expiry_input)
-                    time.sleep(0.3)
+                        for iframe in stripe_iframes:
+                            try:
+                                self.driver.switch_to.frame(iframe)
+                                for field_type, field_info in field_selectors.items():
+                                    try:
+                                        # Special handling for card fields
+                                        if field_type == 'card':
+                                            if card_field_found:
+                                                field = self.driver.find_element(By.CSS_SELECTOR, field_selectors['expiry']['selectors'])
+                                                # If we already found a card field, this is likely an expiry field
+                                                logger.info("Found second card field, treating as expiry field")
+                                                raw_value = f"{self.user_data['payment_method']['expiry_month']}/{self.user_data['payment_method']['expiry_year'][-2:]}"
+                                            else:
+                                                field = self.driver.find_element(By.CSS_SELECTOR, field_info['selectors'])
+                                                raw_value = field_info['value']
+                                                card_field_found = True
+                                        else:
+                                            field = self.driver.find_element(By.CSS_SELECTOR, field_info['selectors'])
+                                            raw_value = field_info['value']
+                                            
+                                        logger.info(f"Found {field_type} field in separate iframe")
+                                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", field)
+                                        time.sleep(0.3)
+                                        self.driver.execute_script("arguments[0].focus(); arguments[0].click();", field)
+                                        time.sleep(0.3)
+                                        self.driver.execute_script("arguments[0].value = '';", field)
+                                        time.sleep(0.3)
+                                        self.driver.execute_script("""
+                                            arguments[0].value = arguments[1];
+                                            arguments[0].dispatchEvent(new Event('input', { bubbles: true }));
+                                            arguments[0].dispatchEvent(new Event('change', { bubbles: true }));
+                                            // Move focus to body element after setting value
+                                            document.body.focus();
+                                            // Dispatch blur event on the field
+                                            arguments[0].dispatchEvent(new Event('blur', { bubbles: true }));
+                                        """, field, raw_value)
+                                        time.sleep(0.3)  # Give time for events to process
+                                        iframe_found = True
+                                        break
+                                    except:
+                                        pass
+                                self.driver.switch_to.default_content()
+                            except Exception as e:
+                                logger.debug(f"Error in multiple iframe approach: {e}")
+                                self.driver.switch_to.default_content()
+
+                    if iframe_found:
+                        logger.info("Successfully filled Stripe payment fields")
+                    else:
+                        logger.warning("Could not find payment iframe with card field, continuing with regular form")
+
                     
-                    # Try JavaScript click instead of direct click
-                    self.driver.execute_script("arguments[0].focus(); arguments[0].click();", expiry_input)
-                    time.sleep(0.3)
-                    
-                    # Use JavaScript to clear the field
-                    self.driver.execute_script("arguments[0].value = '';", expiry_input)
-                    time.sleep(0.3)
-                    
-                    # Format expiry data
-                    expiry_value = f"{self.user_data['payment_method']['expiry_month']}/{self.user_data['payment_method']['expiry_year'][-2:]}"
-                    
-                    # Use JavaScript to set value directly
-                    self.driver.execute_script("arguments[0].value = arguments[1];", expiry_input, expiry_value)
-                    # Trigger input event to ensure the value is registered
-                    self.driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", expiry_input)
-                    self.driver.execute_script("arguments[0].dispatchEvent(new Event('change', { bubbles: true }));", expiry_input)
-                    time.sleep(0.3)
-                    # This line is redundant now since we've already input the expiry data above
-                    # ActionChains(self.driver).send_keys_to_element(expiry_input, expiry_value).perform()
-                except Exception as e:
-                    logger.warning(f"Direct expiry input failed: {e}, trying JavaScript")
-                    try:
-                        # Format the expiry value in the exception handler too
-                        expiry_value = f"{self.user_data['payment_method']['expiry_month']}/{self.user_data['payment_method']['expiry_year'][-2:]}"
-                        self.driver.execute_script(
-                            "arguments[0].value = arguments[1];", 
-                            expiry_input, 
-                            expiry_value
-                        )
-                    except Exception as inner_e:
-                        logger.error(f"JavaScript expiry input also failed: {inner_e}")
-                    
-                time.sleep(0.1)
-                
-                # Similar pattern for CVV
-                try:
-                    cvv_input = WebDriverWait(self.driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, cvv_selectors)))
-                
-                    # Scroll element into view with margin to avoid overlapping elements
-                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); window.scrollBy(0, -100);", cvv_input)
-                    time.sleep(0.3)
-                    
-                    # Try JavaScript click instead of direct click
-                    self.driver.execute_script("arguments[0].focus(); arguments[0].click();", cvv_input)
-                    time.sleep(0.3)
-                    
-                    # Use JavaScript to clear the field
-                    self.driver.execute_script("arguments[0].value = '';", cvv_input)
-                    time.sleep(0.3)
-                    
-                    # Use JavaScript to set value directly
-                    self.driver.execute_script("arguments[0].value = arguments[1];", cvv_input, self.user_data['payment_method']['cvv'])
-                    # Trigger input event to ensure the value is registered
-                    self.driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", cvv_input)
-                    self.driver.execute_script("arguments[0].dispatchEvent(new Event('change', { bubbles: true }));", cvv_input)
-                    time.sleep(0.3)
-                except Exception as e:
-                    logger.warning(f"Direct CVV input failed: {e}, trying JavaScript")
-                    try:
-                        self.driver.execute_script(
-                            "arguments[0].value = arguments[1];", 
-                            cvv_input, 
-                            self.user_data['payment_method']['cvv']
-                        )
-                    except Exception as inner_e:
-                        logger.error(f"JavaScript CVV input also failed: {inner_e}")
-                    
-                time.sleep(1)
-                
-                # Similar pattern for name
-                try:
-                    name_input = WebDriverWait(self.driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, name_selectors)))
-                
-                    # Scroll element into view with margin to avoid overlapping elements
-                    self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'}); window.scrollBy(0, -100);", name_input)
-                    time.sleep(0.3)
-                    
-                    # Try JavaScript click instead of direct click
-                    self.driver.execute_script("arguments[0].focus(); arguments[0].click();", name_input)
-                    time.sleep(0.3)
-                    
-                    # Use JavaScript to clear the field
-                    self.driver.execute_script("arguments[0].value = '';", name_input)
-                    time.sleep(0.3)
-                    
-                    # Use JavaScript to set value directly
-                    name_value = self.user_data['payment_method']['card_holder']
-                    self.driver.execute_script("arguments[0].value = arguments[1];", name_input, name_value)
-                    # Trigger input event to ensure the value is registered
-                    self.driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", name_input)
-                    self.driver.execute_script("arguments[0].dispatchEvent(new Event('change', { bubbles: true }));", name_input)
-                    time.sleep(0.3)
-                except Exception as e:
-                    logger.warning(f"Direct name input failed: {e}, trying JavaScript")
-                    try:
-                        name_value = self.user_data['payment_method']['card_holder']
-                        self.driver.execute_script(
-                            "arguments[0].value = arguments[1];", 
-                            name_input, 
-                            name_value
-                        )
-                    except Exception as inner_e:
-                        logger.error(f"JavaScript name input also failed: {inner_e}")
-                    
-                time.sleep(1)
-                    
-                # Always ensure we switch back to default content
-                if iframe_found:
-                    logger.info("Switching back to main content after filling payment fields")
-                    self.driver.switch_to.default_content()
-                    
+
             except Exception as e:
                 logger.error(f"Error filling payment form: {e}")
-                # Make sure we're back in the main document
                 self.driver.switch_to.default_content()
-                # Additional error handling as needed
-            
+                return None
+
             logger.info(f"Filled {filled_fields} form fields with user data from MongoDB")
             
-            return filled_fields > 0
+            return iframe_found
         
         except Exception as e:
             logger.error(f"Error filling form fields: {e}")
