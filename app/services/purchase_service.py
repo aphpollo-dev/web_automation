@@ -1,13 +1,11 @@
 import uuid
 from datetime import datetime
 from loguru import logger
-from fastapi import BackgroundTasks
 from typing import Dict, Any, Optional
 from bson import ObjectId
 import asyncio
 from selenium.webdriver.common.by import By
 from urllib.parse import urlparse, urljoin
-
 from app.services.scraper import WebScraper
 
 class PurchaseService:

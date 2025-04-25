@@ -57,18 +57,23 @@ class CardService:
             logger.error(f"Failed to add card: {e}")
             raise
     
-    async def get_cards(self) -> List[Card]:
-        """Get all cards.
+    async def get_cards(self, skip: int = 0, limit: int = 10) -> tuple[List[Card], int]:
+        """Get all cards with pagination.
         
+        Args:
+            skip: Number of records to skip
+            limit: Maximum number of records to return
+            
         Returns:
-            List of cards
+            Tuple of (list of cards, total count)
         """
         try:
-            cursor = self.db.cards.find({})
+            total = await self.db.cards.count_documents({})
+            cursor = self.db.cards.find({}).skip(skip).limit(limit)
             cards = await cursor.to_list(length=None)
             
             # Convert to Card objects
-            return [Card(**card) for card in cards]
+            return [Card(**card) for card in cards], total
         
         except Exception as e:
             logger.error(f"Failed to get cards: {e}")

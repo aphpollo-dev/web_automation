@@ -54,10 +54,12 @@ async def connect_to_mongodb():
                 await db.create_collection("users")
                 await db.create_collection("purchases")
                 await db.create_collection("cards")
-                logger.info("Created 'users', 'purchases', and 'cards' collections")
+                await db.create_collection("events")
+                await db.create_collection("prompts")
+                await db.create_collection("user")
+                logger.info("Created 'users', 'purchases', 'cards' and etc.. ")
                 
                 # Create indexes
-                await db.users.create_index("token", unique=True)
                 await db.users.create_index("email", unique=True)
                 await db.purchases.create_index("user_id")
                 await db.purchases.create_index("status")

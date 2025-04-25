@@ -15,7 +15,7 @@ class Purchase(BaseModel):
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
     user_id: PyObjectId
     product_url: str
-    product_info: Dict[str, Any]
+    product_info: Dict[str, Any] = Field(default_factory=dict)
     config: Optional[Dict[str, Any]] = None
     status: str = PurchaseStatus.CREATED
     steps: Dict[str, Dict[str, str]] = {}
