@@ -16,9 +16,10 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException, ElementClickInterceptedException, JavascriptException
 from selenium.webdriver.common.action_chains import ActionChains
 import asyncio
+import os
 
 class WebScraper:
-    def __init__(self, headless: bool = False, user_data: Optional[Dict[str, Any]] = None):
+    def __init__(self, headless: bool = True, user_data: Optional[Dict[str, Any]] = None):
         """Initialize the web scraper.
         
         Args:
@@ -66,11 +67,41 @@ class WebScraper:
         logger.info("User data updated for form filling")
     
     async def initialize_driver(self):
-        """Initialize the Selenium WebDriver."""
+        """Initialize the Selenium WebDriver with proper Chrome version handling."""
         try:
             chrome_options = Options()
             if self.headless:
                 chrome_options.add_argument("--headless")
+            
+            # Add location of Chrome binary
+            chrome_binary_path = "/usr/bin/google-chrome-stable"
+            if os.path.exists(chrome_binary_path):
+                chrome_options.binary_location = chrome_binary_path
+                logger.info(f"Using Chrome binary at: {chrome_binary_path}")
+                
+                # Get Chrome version
+                try:
+                    import subprocess
+                    chrome_version = subprocess.check_output([chrome_binary_path, '--version']).decode().strip().split()[-1]
+                    logger.info(f"Detected Chrome version: {chrome_version}")
+                except Exception as e:
+                    logger.warning(f"Could not detect Chrome version: {e}")
+                    chrome_version = None
+            else:
+                # Try to find Chrome binary
+                possible_paths = [
+                    "/usr/bin/google-chrome",
+                    "/usr/bin/chrome",
+                    "/snap/bin/chromium",
+                    "/snap/bin/google-chrome"
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        chrome_options.binary_location = path
+                        logger.info(f"Using Chrome binary at: {path}")
+                        break
+                else:
+                    logger.warning("Could not find Chrome binary in common locations")
             
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
@@ -88,12 +119,86 @@ class WebScraper:
                 "payment.method_promo_shown": True,
                 "autofill.credit_card_enabled": False,
                 "profile.default_content_setting_values.payment_handler": 2  # 2 = block
-            })            
-            service = Service(ChromeDriverManager().install())
-            # service = Service("C:/chromedriver-win64/chromedriver.exe")
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            logger.info("Selenium WebDriver initialized")
+            })
+            
+            # Try multiple strategies to initialize the WebDriver
+            try:
+                # First, try to use the local chromedriver binary (most reliable in headless VPS)
+                logger.info("Attempting to use local chromedriver binary")
+                local_driver_path = "/home/ubuntu/Scrape_code/chromedriver-linux64/chromedriver"
+                if os.path.exists(local_driver_path):
+                    from selenium.webdriver.chrome.service import Service as ChromeService
+                    service = ChromeService(executable_path=local_driver_path)
+                    self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                    logger.info("Successfully initialized with local ChromeDriver")
+                else:
+                    # If local driver not found, try with ChromeDriverManager
+                    logger.info("Local chromedriver not found, trying with ChromeDriverManager")
+                    from selenium.webdriver.chrome.service import Service as ChromeService
+                    from webdriver_manager.chrome import ChromeDriverManager
+                    from webdriver_manager.core.utils import get_browser_version_from_os
+                    
+                    # Use detected Chrome version or get it from OS
+                    if not chrome_version:
+                        try:
+                            chrome_version = get_browser_version_from_os("google-chrome")
+                            logger.info(f"Detected Chrome version from OS: {chrome_version}")
+                        except Exception as e:
+                            logger.warning(f"Could not detect Chrome version from OS: {e}")
+                    
+                    # Use cache_valid_range to avoid re-downloading drivers
+                    if chrome_version:
+                        service = ChromeService(ChromeDriverManager(driver_version=chrome_version, cache_valid_range=30).install())
+                    else:
+                        service = ChromeService(ChromeDriverManager(cache_valid_range=30).install())
+                    
+                    self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                    logger.info("Successfully initialized ChromeDriver with WebDriver Manager")
+                    
+            except Exception as e1:
+                logger.warning(f"Failed to initialize with ChromeDriverManager: {e1}")
+                
+                try:
+                    # Fallback: try to find chromedriver in the extracted directory
+                    logger.info("Trying to find chromedriver in extracted directory")
+                    extracted_driver_path = None
+                    
+                    # Try multiple potential paths for chromedriver
+                    potential_paths = [
+                        "/home/ubuntu/Scrape_code/chromedriver-linux64/chromedriver",
+                        "/home/ubuntu/Scrape_code/chromedriver",
+                        "/usr/local/bin/chromedriver",
+                        "/usr/bin/chromedriver"
+                    ]
+                    
+                    for path in potential_paths:
+                        if os.path.exists(path) and os.access(path, os.X_OK):
+                            extracted_driver_path = path
+                            break
+                    
+                    if extracted_driver_path:
+                        from selenium.webdriver.chrome.service import Service as ChromeService
+                        service = ChromeService(executable_path=extracted_driver_path)
+                        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                        logger.info(f"Successfully initialized with chromedriver at {extracted_driver_path}")
+                    else:
+                        raise FileNotFoundError("Could not find chromedriver executable in common locations")
+                        
+                except Exception as e2:
+                    logger.warning(f"Failed to initialize with local chromedriver: {e2}")
+                    
+                    # Last resort, try a simplified approach
+                    logger.info("Attempting simplified Chrome initialization")
+                    try:
+                        self.driver = webdriver.Chrome(options=chrome_options)
+                    except Exception as e3:
+                        error_msg = f"All Chrome initialization methods failed. Please ensure Chrome and ChromeDriver versions match.\nFinal error: {e3}"
+                        logger.error(error_msg)
+                        raise ValueError(error_msg)
+            
+            logger.info("Selenium WebDriver initialized successfully")
             return self.driver
+            
         except Exception as e:
             logger.error(f"Failed to initialize WebDriver: {e}")
             raise

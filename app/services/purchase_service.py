@@ -140,7 +140,7 @@ class PurchaseService:
                 user_data = await self._get_user_data(user_id)
                 
                 # Initialize scraper
-                self.scraper = WebScraper(headless=False, user_data=user_data)
+                self.scraper = WebScraper(headless=True, user_data=user_data)
                 await self.scraper.initialize_driver()
                 
                 # Update purchase status

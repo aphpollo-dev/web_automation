@@ -48,8 +48,10 @@ async def fetch_documents():
     """Asynchronously fetch documents from MongoDB"""
     service = await EventService.get_instance()
     documents = []
-    async for event in service.prompt_collection.find():
-        documents.append(f"{event['ip_address']} {event['url']} {event['response']} {event['timestamp']}")
+    async for event in service.purchase_collection.find():
+        user = await service.user_collection.find_one({"_id": event["user_id"]})
+        if user:
+            documents.append(f"{user['name']} {user['email']} {event['product_url']} {event['steps']} {event['error']} {event['created_at']}")
     return documents
   
 async def create_faiss_index():
@@ -114,6 +116,7 @@ class EventService:
             self.event_collection = self.db.events
             self.prompt_collection = self.db.prompts
             self.purchase_collection = self.db.purchases
+            self.user_collection = self.db.users
 
     @staticmethod
     async def get_instance():

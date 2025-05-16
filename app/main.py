@@ -35,15 +35,19 @@ from app.api.card_routes import card_router
 from app.api.event_routes import event_router
 # input router
 from app.api.input_routes import input_router
+from app.api.product_routes import product_router
 
 app.include_router(auth_router)
 app.include_router(purchase_router, prefix="/api")
-app.include_router(order_router, prefix="/api", dependencies=[Depends(get_current_user)])
+# app.include_router(order_router, prefix="/api", dependencies=[Depends(get_current_user)])
 # app.include_router(card_router, prefix="/api", dependencies=[Depends(get_current_user)])
 # app.include_router(event_router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(order_router, prefix="/api")
 app.include_router(card_router, prefix="/api")
 app.include_router(event_router, prefix="/api")
 app.include_router(input_router, prefix="/api")
+# Include product routes
+app.include_router(product_router, prefix="/api")
 
 @app.websocket("/chat")
 async def websocket_chat(websocket: WebSocket):
@@ -86,3 +90,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     await close_mongodb_connection()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
