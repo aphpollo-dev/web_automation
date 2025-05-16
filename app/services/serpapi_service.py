@@ -66,7 +66,7 @@ class SerpApiService:
                             price=price,
                             source=item.get("source", ""),
                             url=product_link,
-                            thumbnail=item.get("thumbnail", ""),
+                            thumbnail=item.get("thumbnails", ""),
                             delivery=item.get("delivery", "")
                         )
                         products.append(product)
