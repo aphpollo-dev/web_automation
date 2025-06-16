@@ -12,4 +12,11 @@ openai==0.28.1
 pytest==7.4.3
 loguru==0.7.2
 lxml==4.9.3
-serpapi==0.1.5 
+google-search-results==2.4.2
+sentence-transformers==2.2.2
+huggingface-hub==0.19.4
+serpapi==0.1.5
+faiss-cpu==1.7.4
+numpy==1.24.3
+passlib==1.7.4
+python-jose[cryptography]==3.3.0
