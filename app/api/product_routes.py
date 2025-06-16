@@ -22,28 +22,40 @@ async def get_product_recommendations(
     db = Depends(get_database)
 ):
     try:
+        logger.info(f"Processing recommendation request for product: {request.product_name}, price: {request.price}, location: {request.city}, {request.state}")
+        
         # First, check if we have recommendations in the database
+        logger.debug("Checking database for existing recommendations...")
         existing_recommendation = await db_service.find_recommendations(
             request.product_name,
             request.price
         )
         
         if existing_recommendation:
+            if not existing_recommendation.recommendations:
+                raise HTTPException(
+                    status_code=404,
+                    detail="There is no matching product."
+                )
             logger.info(f"Found existing recommendations for {request.product_name}")
             return existing_recommendation
             
         # If not found in DB, search using SerpApi
-        recommendations = await serpapi_service.search_products(
+        logger.info("No existing recommendations found. Searching via SerpApi...")
+        recommendations, warning_msg = await serpapi_service.search_products(
             product_name=request.product_name,
             target_price=request.price,
             state=request.state,
             city=request.city
         )
         
+        logger.debug(f"SerpApi search results: {recommendations}")
+        
         if not recommendations:
+            logger.warning(f"No recommendations found for '{request.product_name}' at price ${request.price:.2f}")
             raise HTTPException(
                 status_code=404,
-                detail="No product recommendations found"
+                detail=warning_msg or "There is no matching product."
             )
             
         # Create query product
@@ -54,16 +66,21 @@ async def get_product_recommendations(
         )
         
         # Save to database
+        logger.debug("Saving recommendations to database...")
         await db_service.save_recommendations(query_product, recommendations)
         
+        logger.info("Successfully processed recommendation request")
         return ProductRecommendation(
             query_product=query_product,
             recommendations=recommendations
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error getting product recommendations: {e}")
+        logger.error(f"Error getting product recommendations: {str(e)}", exc_info=True)
+        logger.error(f"Request data: {request.dict()}")
         raise HTTPException(
             status_code=500,
-            detail=str(e)
+            detail=f"Failed to get product recommendations: {str(e)}"
         ) 

@@ -7,6 +7,8 @@ import asyncio
 from selenium.webdriver.common.by import By
 from urllib.parse import urlparse, urljoin
 from app.services.scraper import WebScraper
+from app.models.purchase import PurchaseStatus
+from app.services.api_service import LeionAPIService
 
 class PurchaseService:
     def __init__(self, db):
@@ -17,6 +19,7 @@ class PurchaseService:
         """
         self.db = db
         self.scraper = None
+        self.api_service = LeionAPIService()
         logger.info("Purchase service initialized")
     
     async def _get_user_data(self, user_id: str) -> Dict[str, Any]:
@@ -72,7 +75,7 @@ class PurchaseService:
             
             # Create adapted user data for WebScraper
             adapted_user_data = {
-                "email": user_data.get("email"),
+                "email": "contact@leion.com",
                 "first_name": first_name,
                 "last_name": last_name,
                 "phone": shipping_address.get("phone", ""),
@@ -115,18 +118,27 @@ class PurchaseService:
             purchase_id: ID of the purchase record
         """
         try:
-            # Get the purchase record
-            purchase = await self.db.purchases.find_one({"_id": ObjectId(purchase_id)})
-            if not purchase:
-                logger.error(f"Purchase record not found: {purchase_id}")
-                return
-            
             # Update status to processing
             await self.db.purchases.update_one(
                 {"_id": ObjectId(purchase_id)},
-                {"$set": {"status": "processing"}}
+                {"$set": {"status": PurchaseStatus.PROCESSING}}
             )
-            
+
+            # Get the purchase details
+            purchase = await self.db.purchases.find_one({"_id": ObjectId(purchase_id)})
+            if not purchase:
+                logger.error(f"Purchase {purchase_id} not found")
+                return
+
+            # Get the order_id from config if it exists
+            order_id = purchase.get("config", {}).get("order_id")
+            if order_id:
+                # Update status in Leion API
+                await self.api_service.update_order_status(
+                    order_id=int(order_id),
+                    status=PurchaseStatus.PROCESSING
+                )
+
             # Extract user ID and product URL
             user_id = str(purchase["user_id"])
             product_url = purchase["product_url"]
@@ -146,7 +158,7 @@ class PurchaseService:
                 # Update purchase status
                 await self.db.purchases.update_one(
                     {"_id": ObjectId(purchase_id)},
-                    {"$set": {"status": "processing"}}
+                    {"$set": {"status": PurchaseStatus.PROCESSING}}
                 )
                 
                 # Step 1: Navigate to product page
@@ -280,14 +292,13 @@ class PurchaseService:
                         if not iframe_result and field_types["unknown"]:
                             logger.warning(f"Form filling may be incomplete due to {len(field_types['unknown'])} unrecognized fields")
                     
-                    if not iframe_result:
-                        # Try steps 7 and 8
-                        await self._check_agreement_checkboxes()
-                        if not await self.scraper.find_and_click_button(['payment', 'complete_order', 'checkout']):
-                            logger.warning(f"Could not find payment button on attempt {retry_count}")
-                        
-                        # Wait for any page updates before retrying
-                        await asyncio.sleep(3)
+                    # Try steps 7 and 8
+                    await self._check_agreement_checkboxes()
+                    if not await self.scraper.find_and_click_button(['payment', 'complete_order', 'checkout']):
+                        logger.warning(f"Could not find payment button on attempt {retry_count}")
+                    
+                    # Wait for any page updates before retrying
+                    await asyncio.sleep(3)
                 
                 # Update step 6 in the database with form filling status
                 form_status = "success" if iframe_result else "warning"
@@ -309,9 +320,6 @@ class PurchaseService:
                 # Wait for payment processing
                 await asyncio.sleep(3)
                 
-                # Check for payment errors
-                current_url = self.scraper.driver.current_url
-                
                 # Check for error messages
                 payment_error = await self._check_for_payment_errors()
                 
@@ -320,7 +328,7 @@ class PurchaseService:
                     await self.db.purchases.update_one(
                         {"_id": ObjectId(purchase_id)},
                         {"$set": {
-                            "status": "failed",
+                            "status": PurchaseStatus.FAILED,
                             "error": f"Payment error: {payment_error}",
                             "completed_at": datetime.utcnow()
                         }}
@@ -334,7 +342,7 @@ class PurchaseService:
                     await self.db.purchases.update_one(
                         {"_id": ObjectId(purchase_id)},
                         {"$set": {
-                            "status": "failed",
+                            "status": PurchaseStatus.FAILED,
                             "error": "payment method declined",
                         }}
                     )
@@ -346,17 +354,24 @@ class PurchaseService:
                     await self.db.purchases.update_one(
                         {"_id": ObjectId(purchase_id)},
                         {"$set": {
-                            "status": "completed",
+                            "status": PurchaseStatus.COMPLETED,
                             "completed_at": datetime.utcnow()
                         }}
                     )
                     
+                    # Update final status in Leion API if order_id exists
+                    if order_id:
+                        await self.api_service.update_order_status(
+                            order_id=int(order_id),
+                            status=PurchaseStatus.COMPLETED
+                        )
+
             except Exception as e:
                 logger.error(f"Error during purchase process: {e}")
                 await self.db.purchases.update_one(
                     {"_id": ObjectId(purchase_id)},
-                    {"$set": {"status": "failed", "error": str(e)}}
-                )
+                    {"$set": {"status": PurchaseStatus.FAILED, "error": str(e)}}
+                ) 
                 
             finally:
                 # Close the scraper

@@ -20,7 +20,10 @@ class ProductInfo(BaseModel):
     order_id: str
     product_name: str
     business_name: str
-    price: float
+    leion_url: str
+    product_price: float
+    shipping_price: float
+    fee: float
 
 class Purchase(BaseModel):
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
