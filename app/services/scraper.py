@@ -204,29 +204,54 @@ class WebScraper:
             raise
     
     async def close_driver(self):
-        initial_url = self.driver.current_url
-        
-        if await self.find_and_click_button(['payment', 'complete_order']):
-            # Check if URL changed after clicking button
-            logger.info(f"Initial URL: {initial_url}")
-            time.sleep(20)
-            current_url = self.driver.current_url
-            if current_url.split('?')[0].rstrip('/') != initial_url.split('?')[0].rstrip('/'):
-                logger.info(f"URL changed after clicking button: {current_url}")
-            else:
-                logger.info("URL still unchanged after clicking button")
+        """Close the Selenium WebDriver with proper error handling."""
+        try:
+            if not self.driver:
+                logger.warning("No active WebDriver instance to close")
                 return False
-        else:
-            logger.info("No relevant buttons found or clickable")
-        # await self.find_and_click_button(["payment", "complete_order"])
-        # logger.info("Clicking payment/complete order button if available")
-        """Close the Selenium WebDriver with a 1-minute delay."""
-        if self.driver:
-            logger.info("Waiting for 20s before closing the Selenium WebDriver")
-            await asyncio.sleep(20)  # 1-minute delay
-            self.driver.quit()
-            self.driver = None
-            logger.info("Selenium WebDriver closed")
+
+            initial_url = self.driver.current_url
+            
+            if await self.find_and_click_button(['payment', 'complete_order']):
+                # Check if URL changed after clicking button
+                logger.info(f"Initial URL: {initial_url}")
+                time.sleep(20)
+                if not self.driver:  # Check if driver is still available
+                    logger.warning("WebDriver was closed during wait period")
+                    return False
+                    
+                current_url = self.driver.current_url
+                if current_url.split('?')[0].rstrip('/') != initial_url.split('?')[0].rstrip('/'):
+                    logger.info(f"URL changed after clicking button: {current_url}")
+                else:
+                    logger.info("URL still unchanged after clicking button")
+                    return False
+            else:
+                logger.info("No relevant buttons found or clickable")
+                if self.driver:
+                    logger.info("Waiting for 20s before closing the Selenium WebDriver")
+                    await asyncio.sleep(20)  # 20-second delay
+                    try:
+                        self.driver.quit()
+                    except Exception as e:
+                        logger.error(f"Error while quitting WebDriver: {e}")
+                    finally:
+                        self.driver = None
+                        logger.info("Selenium WebDriver closed")
+                
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error in close_driver: {e}")
+            # Ensure driver is cleaned up even if there's an error
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except Exception as quit_error:
+                    logger.error(f"Error while quitting WebDriver during error handling: {quit_error}")
+                finally:
+                    self.driver = None
+            return False
     
     async def handle_react_select_fields(self) -> None:
         """Handle React Select dropdown components which require special handling."""

@@ -10,6 +10,7 @@ from datetime import datetime
 from app.models.user import User
 from enum import Enum
 from loguru import logger
+from app.services.api_service import LeionAPIService
 
 purchase_router = APIRouter(tags=["purchase"])
 order_router = APIRouter(tags=["order"])
@@ -41,8 +42,10 @@ class LegacyProductInfo(BaseModel):
     order_id: str = ""
     product_name: str = ""
     business_name: str = ""
-    price: float = 0.0
-
+    leion_url: str = ""
+    product_price: float = 0.0
+    shipping_price: float = 0.0
+    fee: float = 0.0
 class PurchaseWithUser(BaseModel):
     id: Optional[str] = Field(alias="_id")
     user_id: str
@@ -72,6 +75,11 @@ class BatchPurchaseRequest(BaseModel):
 class BatchPurchaseResponse(BaseModel):
     message: str
     purchases: List[Dict[str, str]]
+
+class RecommenderOrderRequest(BaseModel):
+    purchase_id: str
+    url: HttpUrl
+    method: PurchaseMethod
 
 @purchase_router.post("/purchases", response_model=BatchPurchaseResponse)
 async def create_batch_purchases(
@@ -135,7 +143,6 @@ async def start_order(
     logger.info(f"Starting order for purchase_id: {request.purchase_id}")
     purchase = await db.purchases.find_one({"_id": ObjectId(request.purchase_id)})
 
-
     if not purchase:
         raise HTTPException(status_code=404, detail="Purchase record not found")
     
@@ -151,6 +158,10 @@ async def start_order(
         {"_id": ObjectId(request.purchase_id)},
         {"$set": {"method": request.method}}
     )
+    
+    # Get the order_id from config if it exists
+    order_id = purchase.get("config", {}).get("order_id")
+    api_service = LeionAPIService()
     
     if request.method == PurchaseMethod.AUTO:
         # Create purchase service and start process in background for auto method
@@ -181,6 +192,14 @@ async def start_order(
                 }
             }
         )
+        
+        # Update Leion API if order_id exists for manual purchase
+        if order_id:
+            await api_service.update_order_status(
+                order_id=int(order_id),
+                status=PurchaseStatus.COMPLETED
+            )
+            
         return {
             "message": "Manual purchase completed",
             "status": "completed"
@@ -435,6 +454,81 @@ async def delete_purchase(
         return None
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete purchase: {str(e)}")
+
+@order_router.post("/recommender_order", response_model=OrderResponse)
+async def recommender_order(
+    request: RecommenderOrderRequest,
+    background_tasks: BackgroundTasks,
+    db = Depends(get_database)
+):
+    """
+    Update product URL and start the purchase workflow for a previously created purchase.
+    
+    - **purchase_id**: ID of the purchase record
+    - **url**: New product URL to update
+    - **method**: Method of the purchase (auto, manual, none)
+    """
+    # Get purchase record
+    logger.info(f"Starting recommender order for purchase_id: {request.purchase_id}")
+    purchase = await db.purchases.find_one({"_id": ObjectId(request.purchase_id)})
+
+    if not purchase:
+        raise HTTPException(status_code=404, detail="Purchase record not found")
+    
+    # Check if purchase is already completed or processing
+    if purchase.get("status") in [PurchaseStatus.COMPLETED, PurchaseStatus.PROCESSING]:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot start order: purchase is already in {purchase.get('status')} status"
+        )
+    
+    # Update the product URL and method in the purchase record
+    await db.purchases.update_one(
+        {"_id": ObjectId(request.purchase_id)},
+        {
+            "$set": {
+                "product_url": str(request.url),
+                "method": request.method,
+                "updated_at": datetime.utcnow()
+            }
+        }
+    )
+    
+    if request.method == PurchaseMethod.AUTO:
+        # Create purchase service and start process in background for auto method
+        purchase_service = PurchaseService(db)
+        background_tasks.add_task(
+            purchase_service.process_purchase,
+            purchase_id=request.purchase_id
+        )
+        return {
+            "message": "Purchase workflow started with updated URL",
+            "status": "processing"
+        }
+    elif request.method == PurchaseMethod.MANUAL:
+        # For manual method, update status directly
+        current_time = datetime.utcnow()
+        await db.purchases.update_one(
+            {"_id": ObjectId(request.purchase_id)},
+            {
+                "$set": {
+                    "status": PurchaseStatus.COMPLETED,
+                    "completed_at": current_time,
+                    "steps": {
+                        "manual": {
+                            "status": "info",
+                            "content": "This is manual purchase with updated URL."
+                        }
+                    }
+                }
+            }
+        )
+        return {
+            "message": "Manual purchase completed with updated URL",
+            "status": "completed"
+        }
+    else:
+        raise HTTPException(status_code=400, detail="Invalid purchase method")
 
 
 
