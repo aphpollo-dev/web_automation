@@ -1663,6 +1663,7 @@ class WebScraper:
                                 iframe_found = False
                                 self.driver.switch_to.default_content()
                                 break
+                        self.driver.switch_to.default_content()
                     # If single iframe approach failed, try multiple iframes approach
                     if not iframe_found:
                         logger.info("Single iframe approach failed, trying multiple iframes")
