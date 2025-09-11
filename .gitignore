@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# Vector DB file
+*.index
+
 # Distribution / packaging
 .Python
 build/

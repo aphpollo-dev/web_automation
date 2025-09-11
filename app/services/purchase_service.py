@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime
 from loguru import logger
 from typing import Dict, Any, Optional
@@ -21,10 +20,10 @@ class PurchaseService:
         self.scraper = None
         self.api_service = LeionAPIService()
         logger.info("Purchase service initialized")
-    
+        
     async def _get_user_data(self, user_id: str) -> Dict[str, Any]:
         """Get user data for filling forms.
-        
+
         Args:
             user_id: ID of the user
             
@@ -75,7 +74,7 @@ class PurchaseService:
             
             # Create adapted user data for WebScraper
             adapted_user_data = {
-                "email": "contact@leion.com",
+                "email": user_data.get("email", ""),
                 "first_name": first_name,
                 "last_name": last_name,
                 "phone": shipping_address.get("phone", ""),
