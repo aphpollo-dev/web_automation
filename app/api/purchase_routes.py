@@ -15,10 +15,12 @@ from app.services.api_service import LeionAPIService
 purchase_router = APIRouter(tags=["purchase"])
 order_router = APIRouter(tags=["order"])
 
+
 class UserInfo(BaseModel):
     email: str
     name: str
     shipping_addresses: list[Dict[str, str]]
+
 
 class PurchaseRequest(BaseModel):
     product_url: HttpUrl
@@ -26,17 +28,21 @@ class PurchaseRequest(BaseModel):
     product_info: ProductInfo
     config: Optional[Dict[str, Any]] = None
 
+
 class OrderRequest(BaseModel):
     purchase_id: str
     method: PurchaseMethod
+
 
 class PurchaseResponse(BaseModel):
     message: str
     purchase_id: str
 
+
 class OrderResponse(BaseModel):
     message: str
     status: str
+
 
 class LegacyProductInfo(BaseModel):
     order_id: str = ""
@@ -46,12 +52,15 @@ class LegacyProductInfo(BaseModel):
     product_price: float = 0.0
     shipping_price: float = 0.0
     fee: float = 0.0
+
+
 class PurchaseWithUser(BaseModel):
     id: Optional[str] = Field(alias="_id")
     user_id: str
     user: Optional[Dict[str, Any]]
     product_url: str
-    product_info: LegacyProductInfo = Field(default_factory=lambda: LegacyProductInfo())
+    product_info: LegacyProductInfo = Field(
+        default_factory=lambda: LegacyProductInfo())
     config: Optional[Dict[str, Any]] = None
     status: str = PurchaseStatus.CREATED
     method: str = PurchaseMethod.NONE
@@ -65,35 +74,41 @@ class PurchaseWithUser(BaseModel):
         populate_by_name = True
         json_encoders = {ObjectId: str}
 
+
 class SortOrder(str, Enum):
     ASC = "asc"
     DESC = "desc"
 
+
 class BatchPurchaseRequest(BaseModel):
     purchases: List[PurchaseRequest]
+
 
 class BatchPurchaseResponse(BaseModel):
     message: str
     purchases: List[Dict[str, str]]
+
 
 class RecommenderOrderRequest(BaseModel):
     purchase_id: str
     url: HttpUrl
     method: PurchaseMethod
 
-@purchase_router.post("/purchases", response_model=BatchPurchaseResponse)
+
+@purchase_router.post("/purchases", response_model=OrderResponse)
 async def create_batch_purchases(
     request: BatchPurchaseRequest,
-    db = Depends(get_database)
+    background_tasks: BackgroundTasks,
+    db=Depends(get_database)
 ):
     """
     Create multiple purchase records at once.
-    
+
     - **purchases**: List of purchase requests containing product_url, user_info, product_info, and optional config
     """
     try:
         purchase_results = []
-        
+
         for purchase_request in request.purchases:
             # Save user information if not exists
             user = await db.users.find_one({"email": purchase_request.user_info.email})
@@ -103,7 +118,7 @@ async def create_batch_purchases(
                 user_id = result.inserted_id
             else:
                 user_id = user["_id"]
-            
+
             # Create purchase record using Purchase model
             purchase = Purchase(
                 user_id=user_id,
@@ -113,29 +128,62 @@ async def create_batch_purchases(
                 status="created",
                 method=PurchaseMethod.NONE
             )
-            
+
             result = await db.purchases.insert_one(purchase.model_dump(by_alias=True))
             purchase_results.append({
                 "purchase_id": str(result.inserted_id),
                 "product_url": str(purchase_request.product_url)
             })
-        
+
+            logger.info(
+                f"Starting order for purchase_id: {result.inserted_id}")
+            purchase = await db.purchases.find_one({"_id": ObjectId(result.inserted_id)})
+
+            if not purchase:
+                raise HTTPException(
+                    status_code=404, detail="Purchase record not found")
+
+            # Check if purchase is already completed or processing
+            if purchase.get("status") in [PurchaseStatus.COMPLETED, PurchaseStatus.PROCESSING]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot start order: purchase is already in {purchase.get('status')} status"
+                )
+
+            # Update the method in the purchase record
+            await db.purchases.update_one(
+                {"_id": ObjectId(result.inserted_id)},
+                {"$set": {"method": "auto"}}
+            )
+
+            # Get the order_id from config if it exists
+            order_id = purchase.get("config", {}).get("order_id")
+            api_service = LeionAPIService()
+
+            purchase_service = PurchaseService(db)
+            background_tasks.add_task(
+                purchase_service.process_purchase,
+                purchase_id=result.inserted_id
+            )
         return {
-            "message": f"Successfully created {len(purchase_results)} purchases",
-            "purchases": purchase_results
+            "message": "Purchase workflow started",
+            "status": "processing"
         }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create batch purchases: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create batch purchases: {str(e)}")
+
 
 @order_router.post("/order", response_model=OrderResponse)
 async def start_order(
     request: OrderRequest,
     background_tasks: BackgroundTasks,
-    db = Depends(get_database)
+    db=Depends(get_database)
 ):
     """
     Start the purchase workflow for a previously created purchase.
-    
+
     - **purchase_id**: ID of the purchase record
     - **method**: Method of the purchase (auto, manual, none)
     """
@@ -144,25 +192,26 @@ async def start_order(
     purchase = await db.purchases.find_one({"_id": ObjectId(request.purchase_id)})
 
     if not purchase:
-        raise HTTPException(status_code=404, detail="Purchase record not found")
-    
+        raise HTTPException(
+            status_code=404, detail="Purchase record not found")
+
     # Check if purchase is already completed or processing
     if purchase.get("status") in [PurchaseStatus.COMPLETED, PurchaseStatus.PROCESSING]:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Cannot start order: purchase is already in {purchase.get('status')} status"
         )
-    
+
     # Update the method in the purchase record
     await db.purchases.update_one(
         {"_id": ObjectId(request.purchase_id)},
         {"$set": {"method": request.method}}
     )
-    
+
     # Get the order_id from config if it exists
     order_id = purchase.get("config", {}).get("order_id")
     api_service = LeionAPIService()
-    
+
     if request.method == PurchaseMethod.AUTO:
         # Create purchase service and start process in background for auto method
         purchase_service = PurchaseService(db)
@@ -192,50 +241,57 @@ async def start_order(
                 }
             }
         )
-        
+
         # Update Leion API if order_id exists for manual purchase
         if order_id:
             await api_service.update_order_status(
                 order_id=int(order_id),
                 status=PurchaseStatus.COMPLETED
             )
-            
+
         return {
             "message": "Manual purchase completed",
             "status": "completed"
         }
     else:
         raise HTTPException(status_code=400, detail="Invalid purchase method")
-        
+
 
 @purchase_router.get("/purchase/{purchase_id}", response_model=dict)
-async def get_purchase_status(purchase_id: str, db = Depends(get_database)):
+async def get_purchase_status(purchase_id: str, db=Depends(get_database)):
     """
     Get the status of a purchase process.
-    
+
     - **purchase_id**: ID of the purchase record
     """
     try:
         purchase_service = PurchaseService(db)
         status = await purchase_service.get_purchase_status(purchase_id)
-        
+
         if not status:
-            raise HTTPException(status_code=404, detail="Purchase record not found")
-            
+            raise HTTPException(
+                status_code=404, detail="Purchase record not found")
+
         return status
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get purchase status: {str(e)}")
-    
+        raise HTTPException(
+            status_code=500, detail=f"Failed to get purchase status: {str(e)}")
+
+
 @purchase_router.get("/purchase", response_model=PaginatedResponse[PurchaseWithUser])
 async def get_all_purchases(
     pagination: PaginationParams = Depends(),
-    status: Optional[PurchaseStatus] = Query(None, description="Filter by purchase status"),
-    method: Optional[PurchaseMethod] = Query(None, description="Filter by purchase method"),
-    sort_by: Optional[str] = Query(None, description="Field to sort by (e.g., created_at, updated_at)"),
-    sort_order: Optional[SortOrder] = Query(SortOrder.DESC, description="Sort order (asc or desc)"),
-    db = Depends(get_database)
+    status: Optional[PurchaseStatus] = Query(
+        None, description="Filter by purchase status"),
+    method: Optional[PurchaseMethod] = Query(
+        None, description="Filter by purchase method"),
+    sort_by: Optional[str] = Query(
+        None, description="Field to sort by (e.g., created_at, updated_at)"),
+    sort_order: Optional[SortOrder] = Query(
+        SortOrder.DESC, description="Sort order (asc or desc)"),
+    db=Depends(get_database)
 ):
     # Build the match condition
     match_condition = {}
@@ -245,7 +301,7 @@ async def get_all_purchases(
         match_condition["method"] = method
     # Count total documents with the filter
     total = await db.purchases.count_documents(match_condition)
-    
+
     # Build the sort condition - always default to DESC (-1)
     sort_condition = {"created_at": -1}  # Default sort
     if sort_by:
@@ -306,9 +362,9 @@ async def get_all_purchases(
             }
         }
     ]
-    
+
     purchases = await db.purchases.aggregate(pipeline).to_list(length=None)
-    
+
     # Convert any remaining ObjectId instances to strings
     def convert_objectid(obj):
         if isinstance(obj, dict):
@@ -318,9 +374,9 @@ async def get_all_purchases(
         elif isinstance(obj, ObjectId):
             return str(obj)
         return obj
-    
+
     purchases = [convert_objectid(purchase) for purchase in purchases]
-    
+
     total_pages = (total + pagination.limit - 1) // pagination.limit
     return PaginatedResponse(
         items=purchases,
@@ -330,21 +386,26 @@ async def get_all_purchases(
         total_pages=total_pages
     )
 
+
 @purchase_router.get("/purchase/user/{email}", response_model=PaginatedResponse[PurchaseWithUser])
 async def get_purchases_by_email(
     email: str,
     pagination: PaginationParams = Depends(),
-    status: Optional[PurchaseStatus] = Query(None, description="Filter by purchase status"),
-    method: Optional[PurchaseMethod] = Query(None, description="Filter by purchase method"),
-    sort_by: Optional[str] = Query(None, description="Field to sort by (e.g., created_at, updated_at)"),
-    sort_order: Optional[SortOrder] = Query(SortOrder.ASC, description="Sort order (asc or desc)"),
-    db = Depends(get_database)
+    status: Optional[PurchaseStatus] = Query(
+        None, description="Filter by purchase status"),
+    method: Optional[PurchaseMethod] = Query(
+        None, description="Filter by purchase method"),
+    sort_by: Optional[str] = Query(
+        None, description="Field to sort by (e.g., created_at, updated_at)"),
+    sort_order: Optional[SortOrder] = Query(
+        SortOrder.ASC, description="Sort order (asc or desc)"),
+    db=Depends(get_database)
 ):
     # Find user by email
     user = await db.users.find_one({"email": email})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     # Build the match condition
     match_condition = {"user_id": user["_id"]}
     if status:
@@ -354,7 +415,7 @@ async def get_purchases_by_email(
 
     # Count total documents with the filter
     total = await db.purchases.count_documents(match_condition)
-    
+
     # Build the sort condition
     sort_condition = {"created_at": 1}  # Default sort
     if sort_by:
@@ -411,7 +472,7 @@ async def get_purchases_by_email(
             }
         }
     ]
-    
+
     purchases = await db.purchases.aggregate(pipeline).to_list(length=None)
 
     # Convert any remaining ObjectId instances to strings
@@ -423,7 +484,7 @@ async def get_purchases_by_email(
         elif isinstance(obj, ObjectId):
             return str(obj)
         return obj
-    
+
     purchases = [convert_objectid(purchase) for purchase in purchases]
 
     total_pages = (total + pagination.limit - 1) // pagination.limit
@@ -435,53 +496,58 @@ async def get_purchases_by_email(
         total_pages=total_pages
     )
 
+
 @purchase_router.delete("/purchase/{purchase_id}", status_code=204)
 async def delete_purchase(
     purchase_id: str,
-    db = Depends(get_database)
+    db=Depends(get_database)
 ):
     """
     Delete a purchase record.
-    
+
     - **purchase_id**: ID of the purchase to delete
     """
     try:
         result = await db.purchases.delete_one({"_id": ObjectId(purchase_id)})
-        
+
         if result.deleted_count == 0:
             raise HTTPException(status_code=404, detail="Purchase not found")
-            
+
         return None
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete purchase: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete purchase: {str(e)}")
+
 
 @order_router.post("/recommender_order", response_model=OrderResponse)
 async def recommender_order(
     request: RecommenderOrderRequest,
     background_tasks: BackgroundTasks,
-    db = Depends(get_database)
+    db=Depends(get_database)
 ):
     """
     Update product URL and start the purchase workflow for a previously created purchase.
-    
+
     - **purchase_id**: ID of the purchase record
     - **url**: New product URL to update
     - **method**: Method of the purchase (auto, manual, none)
     """
     # Get purchase record
-    logger.info(f"Starting recommender order for purchase_id: {request.purchase_id}")
+    logger.info(
+        f"Starting recommender order for purchase_id: {request.purchase_id}")
     purchase = await db.purchases.find_one({"_id": ObjectId(request.purchase_id)})
 
     if not purchase:
-        raise HTTPException(status_code=404, detail="Purchase record not found")
-    
+        raise HTTPException(
+            status_code=404, detail="Purchase record not found")
+
     # Check if purchase is already completed or processing
     if purchase.get("status") in [PurchaseStatus.COMPLETED, PurchaseStatus.PROCESSING]:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Cannot start order: purchase is already in {purchase.get('status')} status"
         )
-    
+
     # Update the product URL and method in the purchase record
     await db.purchases.update_one(
         {"_id": ObjectId(request.purchase_id)},
@@ -493,7 +559,7 @@ async def recommender_order(
             }
         }
     )
-    
+
     if request.method == PurchaseMethod.AUTO:
         # Create purchase service and start process in background for auto method
         purchase_service = PurchaseService(db)
@@ -529,6 +595,3 @@ async def recommender_order(
         }
     else:
         raise HTTPException(status_code=400, detail="Invalid purchase method")
-
-
-

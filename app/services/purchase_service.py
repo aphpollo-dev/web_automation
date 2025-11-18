@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime
 from loguru import logger
 from typing import Dict, Any, Optional
@@ -21,10 +20,10 @@ class PurchaseService:
         self.scraper = None
         self.api_service = LeionAPIService()
         logger.info("Purchase service initialized")
-    
+        
     async def _get_user_data(self, user_id: str) -> Dict[str, Any]:
         """Get user data for filling forms.
-        
+
         Args:
             user_id: ID of the user
             
@@ -75,7 +74,7 @@ class PurchaseService:
             
             # Create adapted user data for WebScraper
             adapted_user_data = {
-                "email": "contact@leion.com",
+                "email": user_data.get("email", ""),
                 "first_name": first_name,
                 "last_name": last_name,
                 "phone": shipping_address.get("phone", ""),
@@ -160,23 +159,81 @@ class PurchaseService:
                     {"_id": ObjectId(purchase_id)},
                     {"$set": {"status": PurchaseStatus.PROCESSING}}
                 )
-                
+
+                await self.scraper.scrape_page(product_url)
+
+                if 'google' in product_url.lower():
+                    logger.info("Detected Google search result page, looking for 'Visit site' button")
+                    
+                    # Update step 1 in database
+                    await self.db.purchases.update_one(
+                        {"_id": ObjectId(purchase_id)},
+                        {"$set": {
+                            "steps.step1": {
+                                "status": "info", 
+                                "content": f"Detected Google search result page, looking for 'Visit site' button"
+                            }
+                        }}
+                    )
+                    
+                    # Common selectors for "Visit site" button/link
+                    visit_site_selectors = [
+                        "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'visit site')]",
+                        "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'visit website')]",
+                        "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'visit')]",
+                        "//a[contains(@href, 'url=')]",  # Google's URL parameter
+                        "//a[contains(@class, 'visit')]",
+                        "//a[contains(@id, 'visit')]"
+                    ]
+                    
+                    # Try each selector
+                    visit_site_found = False
+                    for selector in visit_site_selectors:
+                        try:
+                            elements = self.scraper.driver.find_elements(By.XPATH, selector)
+                            for element in elements:
+                                if element.is_displayed():
+                                    # Get the href attribute
+                                    href = element.get_attribute('href')
+                                    if href:
+                                        logger.info(f"Found 'Visit site' link: {href}")
+                                        
+                                        # Update step 1 in database
+                                        await self.db.purchases.update_one(
+                                            {"_id": ObjectId(purchase_id)},
+                                            {"$set": {
+                                                "steps.step1": {
+                                                    "status": "info", 
+                                                    "content": f"Found 'Visit site' link: {href}"
+                                                }
+                                            }}
+                                        )
+                                        # Update current URL
+                                        product_url = href
+                                        logger.info(f"Navigated to site: {product_url}")
+                                        
+                                        # Update step 1 in database
+                                        await self.db.purchases.update_one(
+                                            {"_id": ObjectId(purchase_id)},
+                                            {"$set": {
+                                                "steps.step1": {
+                                                    "status": "info", 
+                                                    "content": f"Successfully navigated to site: {current_url}"
+                                                }
+                                            }}
+                                        )
+                                        visit_site_found = True
+                                        break
+                        except Exception as e:
+                            logger.debug(f"Error with visit site selector {selector}: {e}")
+                            continue
+                    
                 # Step 1: Navigate to product page
                 logger.info(f"Navigating to product page: {product_url}")
-                await self.scraper.scrape_page(product_url)
+                product_url, _ = await self.scraper.scrape_page(product_url)
                 
-                # Log step 1 to database
-                await self.db.purchases.update_one(
-                    {"_id": ObjectId(purchase_id)},
-                    {"$set": {
-                        "steps": {
-                            "step1": {
-                                "status": "info", 
-                                "content": f"Navigating to product page: {product_url}"
-                            }
-                        }
-                    }}
-                )
+                # Check if we're on a Google search result page
+                
 
                 # Step 2: Apply product configuration
                 logger.info("Applying product configuration")
