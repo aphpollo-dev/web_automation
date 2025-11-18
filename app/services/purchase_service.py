@@ -152,7 +152,7 @@ class PurchaseService:
                 user_data = await self._get_user_data(user_id)
                 
                 # Initialize scraper
-                self.scraper = WebScraper(headless=True, user_data=user_data)
+                self.scraper = WebScraper(headless=False, user_data=user_data)
                 await self.scraper.initialize_driver()
                 
                 # Update purchase status
@@ -261,6 +261,7 @@ class PurchaseService:
                 max_retries = 5  # Prevent infinite loops
                 retry_count = 0
                 
+                # Phase 1: Form Filling
                 while not iframe_result and retry_count < max_retries:
                     retry_count += 1
                     logger.info(f"Form filling attempt {retry_count}")
@@ -292,13 +293,15 @@ class PurchaseService:
                         if not iframe_result and field_types["unknown"]:
                             logger.warning(f"Form filling may be incomplete due to {len(field_types['unknown'])} unrecognized fields")
                     
-                    # Try steps 7 and 8
-                    await self._check_agreement_checkboxes()
-                    if not await self.scraper.find_and_click_button(['payment', 'complete_order', 'checkout']):
-                        logger.warning(f"Could not find payment button on attempt {retry_count}")
-                    
-                    # Wait for any page updates before retrying
-                    await asyncio.sleep(3)
+                        # Try steps 7 and 8
+                        await asyncio.sleep(5)  # Allow time for any JS to process
+                        await self._check_agreement_checkboxes()
+                        await asyncio.sleep(5) 
+                        if not await self.scraper.find_and_click_button(['payment', 'complete_order', 'checkout']):
+                            logger.warning(f"Could not find payment button on attempt {retry_count}")
+                        
+                        # Wait for any page updates before retrying
+                        await asyncio.sleep(3)
                 
                 # Update step 6 in the database with form filling status
                 form_status = "success" if iframe_result else "warning"
